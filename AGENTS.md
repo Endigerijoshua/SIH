@@ -39,17 +39,30 @@ sources**, rank by severity, and render everything on a live map dashboard
 ## Data Sources
 
 ### 1) NASA FIRMS (fire/thermal hotspots)
-- Free `MAP_KEY` — register with email at NASA FIRMS site. **[NOT YET OBTAINED]**
-- Endpoint: WFS returning **GeoJSON** directly (do NOT use the CSV variant).
+- `MAP_KEY` obtained (in `.env`, gitignored). ✅
+- **PRIMARY SOURCE = CSV area API** (empirically verified — the WFS bbox filter returns
+  0 features for every bbox tested, but the CSV area API respects the bbox correctly).
+  Endpoint:
   ```
-  https://firms.modaps.eosdis.nasa.gov/mapserver/wfs/{REGION}/{MAP_KEY}/?SERVICE=WFS&REQUEST=GetFeature&VERSION=2.0.0&TYPENAME=ms:fires_viirs_snpp_24hrs&BBOX={minLon},{minLat},{maxLon},{maxLat}&outputformat=geojson
+  https://firms.modaps.eosdis.nasa.gov/api/area/csv/{MAP_KEY}/{DATASET}/{bbox}/1
   ```
-- Region / bbox for India: **still needs confirmation** (check `SouthEast_Asia` region +
-  India bbox during setup). Log this in a `setup` file/README once confirmed.
+  - `DATASET` for VIIRS: `VIIRS_SNPP_NRT` (also `MODIS_NRT`, `VIIRS_NOAA20_NRT`,
+    `VIIRS_NOAA21_NRT`).
+  - `bbox` format: `minLon,minLat,maxLon,maxLat` (decimal, no CRS).
+  - The `/1` is the day-lookback window (1 = last 24h).
+- Backend converts CSV → clean GeoJSON in `app/services/firms.py` (we control field
+  names; no extra key needed).
+- Region coverage: `SouthEast_Asia` service includes India. India bbox used:
+  `68,7,97,37` (verified — 208 live VIIRS fires returned on 2026-09-04).
 - Refresh: ~15 min. Rate limit: 5,000 req / 10 min — safe to poll live during demo.
-- Detection fields of interest: `latitude`, `longitude`, `confidence`
-  (low/nominal/high), `brightness`/`frp` (Fire Radiative Power; higher = more severe),
-  `acq_date`, `acq_time`, `satellite` (V = VIIRS, M = MODIS).
+- CSV columns of interest: `latitude`, `longitude`, `confidence`
+  (l/n/h = low/nominal/high), `bright_ti4` (brightness), `frp` (Fire Radiative Power;
+  higher = more severe), `acq_date`, `acq_time`, `satellite`, `instrument`, `daynight`.
+- WFS fallback (Do NOT use for bbox queries — bbox param returns 0): WFS works
+  un-bounded, e.g.
+  `https://firms.modaps.eosdis.nasa.gov/mapserver/wfs/SouthEast_Asia/{MAP_KEY}/?SERVICE=WFS&REQUEST=GetFeature&VERSION=2.0.0&TYPENAME=ms:fires_snpp_24hrs&outputformat=geojson`
+  Valid TYPENAMEs (from GetCapabilities): `ms:fires_snpp_24hrs`, `ms:fires_modis_24hrs`,
+  `ms:fires_noaa20_24hrs`, `ms:fires_noaa21_24hrs` (+ `_7days`, `ms:fires_landsat_24hrs`).
 
 ### 2) OSM via Overpass API (industrial zones)
 - Free, no API key.
@@ -75,7 +88,7 @@ sources**, rank by severity, and render everything on a live map dashboard
 
 ## MVP Feature Scope (build top→bottom; each must work before next)
 
-- [ ] 1. Backend endpoint: fetch live FIRMS data (India bbox) → clean GeoJSON
+- [ ] 1. Backend endpoint: fetch live FIRMS data (India bbox) → clean GeoJSON — **✅ API-level done; see status section**
 - [ ] 2. Backend endpoint: fetch OSM industrial polygons (same area)
 - [ ] 3. Spatial join: label fire as "near industrial" + distance to nearest zone
 - [ ] 4. Frontend map: fire points (color by confidence/severity) + industrial polygon
@@ -109,7 +122,7 @@ sih-fire-detection/
 │   ├── main.py               # FastAPI app entry, CORS, routes
 │   ├── config.py             # env config (MAP_KEY, bbox, thresholds)
 │   ├── services/
-│   │   ├── firms.py          # FIRMS WFS fetch → GeoJSON
+│   │   ├── firms.py          # FIRMS CSV area API fetch → clean GeoJSON
 │   │   ├── osm.py            # Overpass industrial zones fetch
 │   │   ├── spatial.py        # sjoin / buffering / nearest-distance
 │   │   ├── persistence.py    # recurrence detection & severity scoring
@@ -142,9 +155,10 @@ sih-fire-detection/
 
 ## Known Gaps / Things to Confirm During Setup
 
-1. **FIRMS MAP_KEY** — request from NASA FIRMS (email registration).
-2. **FIRMS region name + exact India bbox** — confirm the WFS region parameter and
-   bounding box; record in README.
+1. ~~FIRMS MAP_KEY~~ — **done**, in `.env` (`FIRMS_MAP_KEY`).
+2. **FIRMS region + bbox** — **done**: use `api/area/csv` with bbox `68,7,97,37`
+   (verified 208 live VIIRS India fires on 2026-09-04). WFS bbox filter is broken
+   (returns 0); do not rely on it for bbox queries.
 3. **Overpass query working set** — confirm tag choice (`landuse=industrial`) returns
    sensible polygons for India; tune bbox size for response limits.
 4. **DBSCAN** — decide `eps`/`min_samples` sensible for kilometer-scale coordinates.
@@ -160,10 +174,12 @@ sih-fire-detection/
 
 ## Current Status (keep updated)
 
-- [ ] FIRMS MAP_KEY obtained
-- [ ] Confirmed FIRMS region name / bbox for India
-- [ ] Backend scaffold created (FastAPI project structure)
-- [ ] FIRMS fetch endpoint working
+- [x] FIRMS MAP_KEY obtained (stored in `.env`)
+- [x] Confirmed FIRMS region name / bbox for India (`api/area/csv`, bbox `68,7,97,37`)
+- [x] Backend scaffold created (FastAPI project structure)
+- [x] FIRMS fetch endpoint working (`GET /api/fires` → 208 live VIIRS India features,
+       clean GeoJSON; core deps installed in `.venv`) — smoke-tested via TestClient,
+       5 pytest tests pass, ruff clean)
 - [ ] OSM Overpass fetch working
 - [ ] Spatial join logic working
 - [ ] Frontend map rendering both layers
