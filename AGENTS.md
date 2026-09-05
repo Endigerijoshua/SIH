@@ -48,12 +48,13 @@ sources**, rank by severity, and render everything on a live map dashboard
   ```
   - `DATASET` for VIIRS: `VIIRS_SNPP_NRT` (also `MODIS_NRT`, `VIIRS_NOAA20_NRT`,
     `VIIRS_NOAA21_NRT`).
-  - `bbox` format: `minLon,minLat,maxLon,maxLat` (decimal, no CRS).
+  - `bbox` format: `west,south,east,north` (decimal, no CRS) — i.e. `68,6,97,37` for India.
   - The `/1` is the day-lookback window (1 = last 24h).
-- Backend converts CSV → clean GeoJSON in `app/services/firms.py` (we control field
-  names; no extra key needed).
+- Backend converts CSV → clean GeoJSON in `app/services/firms.py` using **pandas**
+  (fields kept verbatim: `confidence`, `bright_ti4`, `frp`, `acq_date`, `acq_time`,
+  `satellite`, `daynight`).
 - Region coverage: `SouthEast_Asia` service includes India. India bbox used:
-  `68,7,97,37` (verified — 208 live VIIRS fires returned on 2026-09-04).
+  `68,6,97,37` (verified — 208 live VIIRS fires returned on 2026-09-04).
 - Refresh: ~15 min. Rate limit: 5,000 req / 10 min — safe to poll live during demo.
 - CSV columns of interest: `latitude`, `longitude`, `confidence`
   (l/n/h = low/nominal/high), `bright_ti4` (brightness), `frp` (Fire Radiative Power;
@@ -156,7 +157,7 @@ sih-fire-detection/
 ## Known Gaps / Things to Confirm During Setup
 
 1. ~~FIRMS MAP_KEY~~ — **done**, in `.env` (`FIRMS_MAP_KEY`).
-2. **FIRMS region + bbox** — **done**: use `api/area/csv` with bbox `68,7,97,37`
+2. **FIRMS region + bbox** — **done**: use `api/area/csv` with bbox `68,6,97,37`
    (verified 208 live VIIRS India fires on 2026-09-04). WFS bbox filter is broken
    (returns 0); do not rely on it for bbox queries.
 3. **Overpass query working set** — confirm tag choice (`landuse=industrial`) returns
@@ -175,7 +176,7 @@ sih-fire-detection/
 ## Current Status (keep updated)
 
 - [x] FIRMS MAP_KEY obtained (stored in `.env`)
-- [x] Confirmed FIRMS region name / bbox for India (`api/area/csv`, bbox `68,7,97,37`)
+- [x] Confirmed FIRMS region name / bbox for India (`api/area/csv`, bbox `68,6,97,37`)
 - [x] Backend scaffold created (FastAPI project structure)
 - [x] FIRMS fetch endpoint working (`GET /api/fires` → 208 live VIIRS India features,
        clean GeoJSON; core deps installed in `.venv`) — smoke-tested via TestClient,

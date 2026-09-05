@@ -7,12 +7,12 @@ endpoints that fetch + enrich live fire data.
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from .services import firms
+from .services import firms, osm, spatial
 
 logging.basicConfig(level=logging.INFO)
 
@@ -57,6 +57,23 @@ async def health() -> dict:
 async def get_fires() -> dict:
     """Fetch live FIRMS hotspots (India bbox) and return clean GeoJSON."""
     return await firms.fetch_fires()
+
+
+@app.get("/api/industrial-zones")
+async def get_industrial_zones() -> dict:
+    """Fetch or serve cached OSM industrial-zone polygons as GeoJSON."""
+    try:
+        return await osm.get_industrial_zones()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/api/flagged-fires")
+async def get_flagged_fires() -> dict:
+    """Live fires annotated with `near_industrial` and `distance_m`."""
+    fires_fc = await firms.fetch_fires()
+    industrial_fc = await osm.get_industrial_zones()
+    return spatial.annotate_fires(fires_fc, industrial_fc)
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

@@ -1,17 +1,22 @@
 """NASA FIRMS live fire/thermal hotspot fetch.
 
-Uses the FIRMS CSV "area" API (verified working with bbox) and converts the
-response into clean GeoJSON for the rest of the app. The WFS bbox variant is
-broken (returns 0 features for any bbox) so we do not use it here.
+Uses the NASA FIRMS "area" API (CSV) and converts the response into clean GeoJSON.
+
+Empirical notes (verified while building, keep for anyone touching this):
+- The FIRMS WFS bbox filter returns 0 features for any bbox -> unusable for India.
+- The unrestricted WFS `fires_snpp_24hrs` layer under-reports India (~16 points on
+  2026-09-04) vs the CSV area API (208 points, same box/date) for the India box.
+  Hence the CSV area API is the correct source.
+- Region for India: `SouthEast_Asia`; India bbox used: `68,6,97,37`.
 
 Reference: https://firms.modaps.eosdis.nasa.gov/api/area/csv
 """
 
-import csv
 import io
 import logging
 
 import httpx
+import pandas as pd
 
 from ..config import settings
 
@@ -21,29 +26,27 @@ FIRMS_AREA_URL = (
     "https://firms.modaps.eosdis.nasa.gov/api/area/csv/{key}/{dataset}/{bbox}/{days}"
 )
 
-# FIRMS confidence codes (1-char) -> friendly label
-CONFIDENCE_LABELS = {"l": "low", "n": "nominal", "h": "high"}
-
-CSV_FLOAT_FIELDS = (
-    "latitude",
-    "longitude",
+# Fields copied verbatim from each FIRMS CSV row onto the GeoJSON feature.
+PROPERTY_FIELDS = (
+    "confidence",
     "bright_ti4",
-    "scan",
-    "track",
-    "bright_ti5",
     "frp",
+    "acq_date",
+    "acq_time",
+    "satellite",
+    "daynight",
 )
 
 
 def parse_bbox(bbox: str) -> tuple[float, float, float, float]:
-    """Parse 'minLon,minLat,maxLon,maxLat' into floats, validating India bounds."""
+    """Parse 'west,south,east,north' into floats, validating global bounds."""
     parts = [float(p.strip()) for p in bbox.split(",")]
     if len(parts) != 4:
-        raise ValueError(f"bbox must be 'minLon,minLat,maxLon,maxLat', got: {bbox}")
-    min_lon, min_lat, max_lon, max_lat = parts
-    if not (-180 <= min_lon < max_lon <= 180) or not (-90 <= min_lat < max_lat <= 90):
+        raise ValueError(f"bbox must be 'west,south,east,north', got: {bbox}")
+    west, south, east, north = parts
+    if not (-180 <= west < east <= 180) or not (-90 <= south < north <= 90):
         raise ValueError(f"invalid bbox: {bbox}")
-    return min_lon, min_lat, max_lon, max_lat
+    return west, south, east, north
 
 
 def build_url(api_key: str, dataset: str, bbox: str, days: int) -> str:
@@ -56,42 +59,56 @@ def build_url(api_key: str, dataset: str, bbox: str, days: int) -> str:
     )
 
 
-def _normalize_props(raw: dict) -> dict:
-    props = {
-        "latitude": float(raw["latitude"]),
-        "longitude": float(raw["longitude"]),
-        "confidence": CONFIDENCE_LABELS.get(raw["confidence"], raw["confidence"]),
-        "brightness": float(raw["bright_ti4"]) if raw.get("bright_ti4") else None,
-        "frp": float(raw["frp"]) if raw.get("frp") else None,
-        "acq_date": raw.get("acq_date", ""),
-        "acq_time": raw.get("acq_time", "").zfill(4),
-        "satellite": raw.get("satellite", ""),
-        "instrument": raw.get("instrument", ""),
-        "daynight": raw.get("daynight", ""),
-        "source": "nasa_firms",
-    }
-    return props
+def _json_value(value):
+    """Convert a pandas/numpy scalar into a plain JSON-safe Python value."""
+    if value is None:
+        return None
+    if pd.isna(value):
+        return None
+    if isinstance(value, (str, bool)):
+        return value
+    if hasattr(value, "item"):
+        return value.item()
+    return value
 
 
 def csv_to_geojson(csv_text: str) -> dict:
-    """Convert FIRMS area-API CSV text into a GeoJSON FeatureCollection."""
+    """Convert FIRMS area-API CSV text into a GeoJSON FeatureCollection.
+
+    Logs the input row count vs. produced feature count so any dropped
+    detection is never silent.
+    """
+    df = pd.read_csv(io.StringIO(csv_text))
+    total_rows = len(df)
+
     features = []
-    reader = csv.DictReader(io.StringIO(csv_text))
-    for i, row in enumerate(reader):
-        if not row.get("longitude"):
+    dropped = 0
+    for _, row in df.iterrows():
+        lon, lat = row["longitude"], row["latitude"]
+        if pd.isna(lon) or pd.isna(lat):
+            dropped += 1
             continue
-        props = _normalize_props(row)
+        props = {field: _json_value(row[field]) for field in PROPERTY_FIELDS}
         features.append(
             {
                 "type": "Feature",
-                "id": i,
-                "geometry": {
-                    "type": "Point",
-                    "coordinates": [props["longitude"], props["latitude"]],
-                },
-                "properties": {k: v for k, v in props.items()},
+                "id": len(features),
+                "geometry": {"type": "Point", "coordinates": [float(lon), float(lat)]},
+                "properties": props,
             }
         )
+
+    if dropped:
+        logger.warning(
+            "FIRMS CSV->GeoJSON dropped %s of %s rows (missing coordinates)",
+            dropped,
+            total_rows,
+        )
+    logger.info(
+        "FIRMS CSV -> GeoJSON: %s rows parsed, %s features produced",
+        total_rows,
+        len(features),
+    )
     return {"type": "FeatureCollection", "features": features}
 
 

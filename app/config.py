@@ -8,11 +8,19 @@ class Settings(BaseSettings):
 
     firms_map_key: str = ""
     firms_dataset: str = "VIIRS_SNPP_NRT"
-    firms_bbox: str = "68,7,97,37"
+    firms_bbox: str = "68,6,97,37"
     firms_days: int = 1
     buffer_meters: int = 1000
     persistence_radius_km: float = 3.0
     persistence_min_occurrences: int = 2
+    industrial_states: dict[str, str] = {
+        "gujarat": "67.5,20,75,25",
+        "jharkhand": "83,21.5,88,25.5",
+        "maharashtra": "72,15,81,22.5",
+    }
+    overpass_timeout: int = 180
+    industrial_cache_file: str = "industrial_zones_cache.json"
+    industrial_cache_max_age_hours: int = 24
 
 
 @lru_cache
