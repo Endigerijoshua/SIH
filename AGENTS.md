@@ -178,12 +178,14 @@ sih-fire-detection/
 - [x] FIRMS MAP_KEY obtained (stored in `.env`)
 - [x] Confirmed FIRMS region name / bbox for India (`api/area/csv`, bbox `68,6,97,37`)
 - [x] Backend scaffold created (FastAPI project structure)
-- [x] FIRMS fetch endpoint working (`GET /api/fires` → 208 live VIIRS India features,
-       clean GeoJSON; core deps installed in `.venv`) — smoke-tested via TestClient,
-       5 pytest tests pass, ruff clean)
-- [ ] OSM Overpass fetch working
-- [ ] Spatial join logic working
-- [ ] Frontend map rendering both layers
-- [ ] Persistence tracking implemented
+- [x] FIRMS fetch endpoint working (`GET /api/fires`, default `FIRMS_DAYS=3` —
+       lookback configurable via `?days= N` too)
+- [x] OSM Overpass fetch working (tiled state bboxes, 24h file cache, kumi mirror)
+- [x] Spatial join logic working (UTM-projected nearest-distance; 1 km near flag)
+- [x] Frontend map rendering both layers (Leaflet; fires color-coded, zones translucent,
+       sidebar with flagged + persistent sections)
+- [x] Persistence tracking implemented (`fire_history` SQLite table accumulates every
+       detection on `/api/fires` and `/api/flagged-fires`; flags `persistent_thermal_source`
+       for 2+ distinct days within 300 m in last 14 days, with `occurrence_count`; 22 tests, ruff clean)
 - [ ] DBSCAN clustering (stretch)
 - [ ] Deployed somewhere accessible for demo

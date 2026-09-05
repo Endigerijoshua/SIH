@@ -18,20 +18,47 @@ SAMPLE_WAYS = [
         "tags": {"landuse": "industrial"},
         "geometry": [{"lat": 19.0, "lon": 73.0}, {"lat": 19.0, "lon": 73.1}],
     },
+    {
+        "type": "way",
+        "id": 103,
+        "tags": {"natural": "wood", "name": "Dark Forest"},
+        "geometry": [
+            {"lat": 22.0, "lon": 78.0},
+            {"lat": 22.0, "lon": 78.1},
+            {"lat": 22.1, "lon": 78.1},
+            {"lat": 22.1, "lon": 78.0},
+        ],
+    },
     {"type": "node", "id": 999, "lat": 20.0, "lon": 75.0},
 ]
 
 
 def test_build_query_bbox_order():
-    query = osm.build_query(72.0, 15.0, 81.0, 22.5, 90)
+    query = osm.build_query(72.0, 15.0, 81.0, 22.5, "industrial", 90)
     assert 'way["landuse"="industrial"]' in query
     assert "(15.0,72.0,22.5,81.0)" in query
     assert "timeout:90" in query
 
 
+def test_build_query_vegetation_unions_three_tags():
+    query = osm.build_query(72.0, 15.0, 81.0, 22.5, "vegetation", 90)
+    assert 'way["natural"="wood"]' in query
+    assert 'way["natural"="scrub"]' in query
+    assert 'way["landuse"="forest"]' in query
+    assert query.count('way["') == 3
+
+
+def test_build_query_unknown_zone_type_raises():
+    try:
+        osm.build_query(72.0, 15.0, 81.0, 22.5, "nope", 90)
+        raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+
+
 def test_elements_to_featurecollection():
     fc = osm.osm_elements_to_featurecollection(SAMPLE_WAYS)
-    assert len(fc["features"]) == 1
+    assert len(fc["features"]) == 2
     feat = fc["features"][0]
     assert feat["geometry"]["type"] == "Polygon"
     ring = feat["geometry"]["coordinates"][0]
@@ -39,6 +66,9 @@ def test_elements_to_featurecollection():
     assert feat["properties"]["name"] == "Steel Plant"
     assert feat["properties"]["landuse"] == "industrial"
     assert feat["id"] == "osm-way-101"
+    forest = fc["features"][1]
+    assert forest["properties"]["natural"] == "wood"
+    assert forest["properties"]["name"] == "Dark Forest"
 
 
 def test_parse_state_bbox_good():

@@ -45,11 +45,48 @@ FIRE_FAR_AWAY = {
     "properties": {},
 }
 
+# Forest polygon overlapping the plant so a point inside both exists.
+FOREST_POLY = {
+    "type": "Feature",
+    "id": "osm-way-2",
+    "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [72.15, 22.40],
+                [72.75, 22.40],
+                [72.75, 22.50],
+                [72.15, 22.50],
+                [72.15, 22.40],
+            ]
+        ],
+    },
+    "properties": {"landuse": "forest", "name": "Test Forest"},
+}
 
-def _run(fires):
+# A fire inside the forest polygon, far from the plant.
+FIRE_IN_FOREST = {
+    "type": "Feature",
+    "id": 4,
+    "geometry": {"type": "Point", "coordinates": [72.15, 22.45]},
+    "properties": {},
+}
+
+# A fire inside the forest polygon AND inside the plant polygon.
+FIRE_IN_BOTH = {
+    "type": "Feature",
+    "id": 5,
+    "geometry": {"type": "Point", "coordinates": [72.55, 22.49]},
+    "properties": {},
+}
+
+FOREST_FC = {"type": "FeatureCollection", "features": [FOREST_POLY]}
+
+
+def _run(fires, vegetation_fc=None):
     fc = {"type": "FeatureCollection", "features": fires}
     zones = {"type": "FeatureCollection", "features": [PLANT_POLY]}
-    return spatial.annotate_fires(fc, zones)["features"]
+    return spatial.annotate_fires(fc, zones, vegetation_fc)["features"]
 
 
 def test_fire_inside_zone_flagged():
@@ -84,4 +121,38 @@ def test_all_features_have_annotation_fields():
     for feat in feats:
         assert "near_industrial" in feat["properties"]
         assert "distance_m" in feat["properties"]
+        assert "fire_type" in feat["properties"]
+        assert "near_vegetation" in feat["properties"]
+        assert "vegetation_distance_m" in feat["properties"]
     assert sum(f["properties"]["near_industrial"] for f in feats) == 2
+
+
+def test_fire_inside_industrial_zone_fire_type_industrial():
+    feats = _run([FIRE_INSIDE])
+    assert feats[0]["properties"]["fire_type"] == "industrial"
+    assert feats[0]["properties"]["near_industrial"] is True
+
+
+def test_fire_in_forest_only_is_forest():
+    feats = _run([FIRE_IN_FOREST], FOREST_FC)
+    prop = feats[0]["properties"]
+    assert prop["fire_type"] == "forest"
+    assert prop["near_industrial"] is False
+    assert prop["near_vegetation"] is True
+    assert prop["vegetation_distance_m"] <= 1000
+
+
+def test_fire_near_everything_stays_industrial():
+    feats = _run([FIRE_IN_BOTH], FOREST_FC)
+    prop = feats[0]["properties"]
+    assert prop["fire_type"] == "industrial"
+    assert prop["near_industrial"] is True
+    assert prop["near_vegetation"] is True
+
+
+def test_fire_far_from_all_is_other_natural():
+    feats = _run([FIRE_FAR_AWAY], FOREST_FC)
+    prop = feats[0]["properties"]
+    assert prop["fire_type"] == "other_natural"
+    assert prop["near_industrial"] is False
+    assert prop["near_vegetation"] is False

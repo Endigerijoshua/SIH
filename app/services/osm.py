@@ -1,9 +1,10 @@
-"""OpenStreetMap industrial zone fetch via the Overpass API.
+"""OpenStreetMap zone fetch via the Overpass API (industrial + vegetation).
 
-Queries `landuse=industrial` polygons for a set of regional bboxes (Gujarat,
-Jharkhand, Maharashtra — the full-India box is too slow / times out), converts
-the Overpass JSON response into a GeoJSON FeatureCollection, and caches the
-result to a local file so Overpass is not hit on every request.
+Queries industrial (`landuse=industrial`) and vegetation (`natural=wood`,
+`natural=scrub`, `landuse=forest`) polygons for a set of regional bboxes
+(Gujarat, Jharkhand, Maharashtra — the full-India box is too slow / times out),
+converts the Overpass JSON response into GeoJSON FeatureCollections, and caches
+each layer to its own local file so Overpass is not hit on every request.
 
 The primary mirror at overpass-api.de consistently rejected requests with 406
 during development, so queries go straight to the kumi mirror.
@@ -25,11 +26,24 @@ OVERPASS_URLS = ("https://overpass.kumi.systems/api/interpreter",)
 
 OVERPASS_HEADERS = {"Accept": "application/json"}
 
-OVERPASS_QUERY = (
-    "[out:json][timeout:{timeout}];"
-    '(way["landuse"="industrial"]({south},{west},{north},{east}););'
-    "out body geom;"
-)
+OVERPASS_QUERY = "[out:json][timeout:{timeout}];({queries});out body geom;"
+
+# Per-layer Overpass tag queries. Each entry is a union block of `way[...]`
+# clauses; the bbox placeholders are filled per tile by build_query().
+# Note Overpass bbox order is south,west,north,east.
+ZONE_QUERIES = {
+    "industrial": ('way["landuse"="industrial"]({south},{west},{north},{east});',),
+    "vegetation": (
+        'way["natural"="wood"]({south},{west},{north},{east});',
+        'way["natural"="scrub"]({south},{west},{north},{east});',
+        'way["landuse"="forest"]({south},{west},{north},{east});',
+    ),
+}
+
+CACHE_FILE_SETTINGS = {
+    "industrial": "industrial_cache_file",
+    "vegetation": "vegetation_cache_file",
+}
 
 
 def parse_state_bbox(bbox: str) -> tuple[float, float, float, float]:
@@ -68,12 +82,21 @@ def tile_bbox(
 
 
 def build_query(
-    west: float, south: float, east: float, north: float, timeout: int
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+    zone_type: str,
+    timeout: int,
 ) -> str:
-    """Build the Overpass query. Note Overpass bbox order is south,west,north,east."""
-    return OVERPASS_QUERY.format(
-        timeout=timeout, south=south, west=west, north=north, east=east
+    """Build the Overpass query for one tile of one zone layer."""
+    if zone_type not in ZONE_QUERIES:
+        raise ValueError(f"unknown zone type: {zone_type}")
+    union = "\n".join(
+        clause.format(south=south, west=west, north=north, east=east)
+        for clause in ZONE_QUERIES[zone_type]
     )
+    return OVERPASS_QUERY.format(timeout=timeout, queries=union)
 
 
 def _way_to_polygon(element: dict) -> Polygon | None:
@@ -108,6 +131,7 @@ def osm_elements_to_featurecollection(elements: list[dict]) -> dict:
             logger.debug("skipping way %s: no valid polygon", osm_id)
             continue
         seen_ids.add(osm_id)
+        tags = element.get("tags", {})
         features.append(
             {
                 "type": "Feature",
@@ -116,54 +140,60 @@ def osm_elements_to_featurecollection(elements: list[dict]) -> dict:
                 "properties": {
                     "osm_type": "way",
                     "osm_id": osm_id,
-                    "name": element.get("tags", {}).get("name"),
-                    "landuse": element.get("tags", {}).get("landuse"),
-                    "industrial": element.get("tags", {}).get("industrial"),
+                    "name": tags.get("name"),
+                    "landuse": tags.get("landuse"),
+                    "industrial": tags.get("industrial"),
+                    "natural": tags.get("natural"),
                 },
             }
         )
     return {"type": "FeatureCollection", "features": features}
 
 
-def _cache_path() -> Path:
-    return Path(settings.industrial_cache_file)
+def _cache_path(zone_type: str) -> Path:
+    return Path(getattr(settings, CACHE_FILE_SETTINGS[zone_type]))
 
 
-def _cache_is_fresh(path: Path) -> bool:
+def _cache_is_fresh(path: Path, zone_type: str) -> bool:
     if not path.exists():
         return False
     age_seconds = time.time() - path.stat().st_mtime
     fresh = age_seconds < settings.industrial_cache_max_age_hours * 3600
     if fresh:
-        logger.info("industrial zones cache is fresh (%.1f h old)", age_seconds / 3600)
+        logger.info(
+            "%s zones cache is fresh (%.1f h old)", zone_type, age_seconds / 3600
+        )
     else:
-        logger.info("industrial zones cache is stale (%.1f h old)", age_seconds / 3600)
+        logger.info(
+            "%s zones cache is stale (%.1f h old)", zone_type, age_seconds / 3600
+        )
     return fresh
 
 
-def read_cache() -> dict | None:
-    path = _cache_path()
-    if not _cache_is_fresh(path):
+def read_cache(zone_type: str) -> dict | None:
+    path = _cache_path(zone_type)
+    if not _cache_is_fresh(path, zone_type):
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("could not read industrial zones cache: %s", exc)
+        logger.warning("could not read %s zones cache: %s", zone_type, exc)
         return None
     return data.get("feature_collection")
 
 
-def write_cache(feature_collection: dict) -> None:
+def write_cache(zone_type: str, feature_collection: dict) -> None:
     payload = {
         "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "states": list(settings.industrial_states),
         "feature_collection": feature_collection,
     }
-    path = _cache_path()
+    path = _cache_path(zone_type)
     path.write_text(json.dumps(payload), encoding="utf-8")
     logger.info(
-        "cached %s industrial zone features to %s",
+        "cached %s %s zone feature(s) to %s",
         len(feature_collection["features"]),
+        zone_type,
         path,
     )
 
@@ -173,16 +203,23 @@ async def fetch_region(
     south: float,
     east: float,
     north: float,
+    zone_type: str,
     client: httpx.AsyncClient,
     timeout: int,
 ) -> list[dict]:
     """Query each configured Overpass instance in order, returning first success."""
-    query = build_query(west, south, east, north, timeout)
+    query = build_query(west, south, east, north, zone_type, timeout)
     last_error: Exception | None = None
     for base_url in OVERPASS_URLS:
         try:
             logger.info(
-                "querying %s for bbox %s,%s,%s,%s", base_url, west, south, east, north
+                "querying %s for %s bbox %s,%s,%s,%s",
+                base_url,
+                zone_type,
+                west,
+                south,
+                east,
+                north,
             )
             response = await client.get(
                 base_url,
@@ -196,19 +233,22 @@ async def fetch_region(
             last_error = exc
             logger.warning("%s failed (%s) — trying next mirror", base_url, exc)
     raise RuntimeError(
-        f"Overpass unavailable for bbox {west},{south},{east},{north}: {last_error}"
+        f"Overpass unavailable for {zone_type} bbox "
+        f"{west},{south},{east},{north}: {last_error}"
     )
 
 
-async def get_industrial_zones(client: httpx.AsyncClient | None = None) -> dict:
-    """Return industrial-zone polygons as a GeoJSON FeatureCollection.
+async def get_zones(
+    zone_type: str, client: httpx.AsyncClient | None = None
+) -> dict:
+    """Return one zone layer as a GeoJSON FeatureCollection.
 
     Serves from a fresh local cache if available; otherwise queries Overpass per
     state, split into tiles, and writes a new cache file. Individual tile
     failures are logged and skipped so a partial dataset still caches and the
     demo keeps working.
     """
-    cached = read_cache()
+    cached = read_cache(zone_type)
     if cached is not None:
         return cached
 
@@ -224,18 +264,41 @@ async def get_industrial_zones(client: httpx.AsyncClient | None = None) -> dict:
             for tile in tile_bbox(west, south, east, north):
                 try:
                     tile_elements = await fetch_region(
-                        *tile, client, settings.overpass_timeout
+                        *tile, zone_type, client, settings.overpass_timeout
                     )
                     elements.extend(tile_elements)
                 except RuntimeError as exc:
                     failures += 1
-                    logger.error("skipping tile %s of %s after %s", tile, state, exc)
+                    logger.error(
+                        "skipping %s tile %s of %s after %s",
+                        zone_type,
+                        tile,
+                        state,
+                        exc,
+                    )
         logger.info(
-            "%s industrial ways total, %s tile(s) failed", len(elements), failures
+            "%s: %s ways total, %s tile(s) failed",
+            zone_type,
+            len(elements),
+            failures,
         )
         feature_collection = osm_elements_to_featurecollection(elements)
-        write_cache(feature_collection)
+        write_cache(zone_type, feature_collection)
         return feature_collection
     finally:
         if closer:
             await client.aclose()
+
+
+async def get_industrial_zones(
+    client: httpx.AsyncClient | None = None,
+) -> dict:
+    """Industrial land-use polygons (landuse=industrial) as GeoJSON."""
+    return await get_zones("industrial", client)
+
+
+async def get_vegetation_zones(
+    client: httpx.AsyncClient | None = None,
+) -> dict:
+    """Forest/vegetation polygons (wood, scrub, forest) as GeoJSON."""
+    return await get_zones("vegetation", client)

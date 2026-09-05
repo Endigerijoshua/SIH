@@ -1,0 +1,154 @@
+"""SQLite storage for fire detection history.
+
+Each detection returned by the FIRMS endpoints is appended to the `fire_history`
+table so recurrence (persistent thermal source) checks have days of data to match
+against. Pure stdlib `sqlite3` — no ORM, no setup.
+
+The table is de-duplicated by (latitude, longitude, acq_date, acq_time, satellite),
+so calling the endpoints repeatedly (e.g. with different lookback windows) does not
+inflate occurrence counts.
+"""
+
+import datetime as dt
+import logging
+import math
+import sqlite3
+from contextlib import contextmanager
+
+from .config import settings
+
+logger = logging.getLogger(__name__)
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS fire_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    acq_date TEXT NOT NULL,
+    acq_time INTEGER,
+    confidence TEXT,
+    bright_ti4 REAL,
+    frp REAL,
+    satellite TEXT,
+    daynight TEXT,
+    recorded_at TEXT NOT NULL,
+    UNIQUE (latitude, longitude, acq_date, acq_time, satellite)
+);
+CREATE INDEX IF NOT EXISTS idx_fire_history_location
+    ON fire_history (latitude, longitude, acq_date);
+"""
+
+
+def db_path() -> str:
+    return settings.fire_history_db
+
+
+def today() -> dt.date:
+    """UTC date, used as the reference point for persistence lookback windows."""
+    return dt.datetime.now(dt.timezone.utc).date()
+
+
+@contextmanager
+def get_connection():
+    conn = sqlite3.connect(db_path())
+    try:
+        conn.executescript(SCHEMA)
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def record_featurecollection(fc: dict) -> int:
+    """Insert every FIRMS feature in `fc` into fire_history.
+
+    Returns the number of new rows actually inserted (duplicates ignored).
+    """
+    rows = []
+    for feature in fc.get("features", []):
+        props = feature.get("properties") or {}
+        geom = feature.get("geometry") or {}
+        coords = geom.get("coordinates")
+        if not coords or not props.get("acq_date"):
+            continue
+        lon, lat = coords[0], coords[1]
+        if lon is None or lat is None:
+            continue
+        rows.append(
+            (
+                float(lat),
+                float(lon),
+                str(props["acq_date"]),
+                props.get("acq_time"),
+                props.get("confidence"),
+                props.get("bright_ti4"),
+                props.get("frp"),
+                props.get("satellite"),
+                props.get("daynight"),
+                dt.datetime.now(dt.timezone.utc).isoformat(),
+            )
+        )
+    return _insert_many(rows)
+
+
+def _insert_many(rows: list[tuple]) -> int:
+    if not rows:
+        return 0
+    with get_connection() as conn:
+        cur = conn.executemany(
+            """
+            INSERT OR IGNORE INTO fire_history (
+                latitude, longitude, acq_date, acq_time, confidence,
+                bright_ti4, frp, satellite, daynight, recorded_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+    inserted = cur.rowcount
+    if inserted:
+        logger.info("stored %s new detection(s) in fire_history", inserted)
+    return inserted
+
+
+def distinct_days_near(
+    lat: float, lon: float, radius_m: float, lookback_days: int
+) -> list[str]:
+    """Distinct acq_dates of past detections within `radius_m` of (lat, lon).
+
+    A coarse degree-based bounding box filters in SQL, then the exact
+    haversine distance is checked in Python so results are in real meters.
+    `lookback_days` counts back from today (inclusive).
+    """
+    pad_m = radius_m / 111320.0
+    lon_pad = pad_m / max(math.cos(math.radians(lat)), 0.2)
+    cutoff = (today() - dt.timedelta(days=lookback_days - 1)).isoformat()
+
+    days: set[str] = set()
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            SELECT DISTINCT acq_date, latitude, longitude
+            FROM fire_history
+            WHERE latitude BETWEEN ? AND ?
+              AND longitude BETWEEN ? AND ?
+              AND acq_date >= ?
+            """,
+            (lat - pad_m, lat + pad_m, lon - lon_pad, lon + lon_pad, cutoff),
+        )
+        for acq_date, row_lat, row_lon in cur.fetchall():
+            if _haversine_meters(lat, lon, row_lat, row_lon) <= radius_m:
+                days.add(acq_date)
+    return sorted(days)
+
+
+def _haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between two lat/lon points, in meters."""
+    radius = 6371000.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    d_phi = math.radians(lat2 - lat1)
+    d_lambda = math.radians(lon2 - lon1)
+    a = (
+        math.sin(d_phi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
+    )
+    return 2 * radius * math.asin(math.sqrt(a))
