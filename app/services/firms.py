@@ -9,14 +9,28 @@ Empirical notes (verified while building, keep for anyone touching this):
   Hence the CSV area API is the correct source.
 - Region for India: `SouthEast_Asia`; India bbox used: `68,6,97,37`.
 
+India boundary filter:
+- The FIRMS area API bbox is a *rectangle*, so it always includes fires in
+  neighbouring countries (Pakistan, China, Nepal, Bhutan, Bangladesh, Myanmar,
+  Sri Lanka). Every response is therefore clipped to a real India boundary
+  polygon (`app/data/india_boundary.geojson`, Natural Earth 10m admin-0) before
+  it is returned. A tight rectangle is NOT enough - it leaks along the borders.
+- A tiny outward buffer (default 0.03 deg ~= 3 km, `india_boundary_buffer_deg`)
+  absorbs FIRMS point geolocation error (~375 m for VIIRS) so genuine border
+  fires on the India side are not dropped.
+
 Reference: https://firms.modaps.eosdis.nasa.gov/api/area/csv
 """
 
 import io
+import json
 import logging
+from functools import lru_cache
+from pathlib import Path
 
 import httpx
 import pandas as pd
+from shapely.geometry import MultiPolygon, Point, Polygon, shape
 
 from ..config import get_settings
 
@@ -24,6 +38,13 @@ logger = logging.getLogger(__name__)
 
 FIRMS_AREA_URL = (
     "https://firms.modaps.eosdis.nasa.gov/api/area/csv/{key}/{dataset}/{bbox}/{days}"
+)
+
+# Natural Earth 10m admin-0 boundary for India (public domain). Contains islands
+# (Andaman & Nicobar) as extra polygons. 110m was tried first but is too coarse:
+# it drops the NE border states and the island territories.
+INDIA_BOUNDARY_FILE = (
+    Path(__file__).resolve().parent.parent / "data" / "india_boundary.geojson"
 )
 
 # Fields copied verbatim from each FIRMS CSV row onto the GeoJSON feature.
@@ -70,6 +91,62 @@ def _json_value(value):
     if hasattr(value, "item"):
         return value.item()
     return value
+
+
+@lru_cache(maxsize=1)
+def _india_boundary() -> Polygon | MultiPolygon:
+    """Load the India boundary polygon from the bundled Natural Earth GeoJSON."""
+    if not INDIA_BOUNDARY_FILE.exists():
+        raise FileNotFoundError(
+            f"India boundary GeoJSON not found: {INDIA_BOUNDARY_FILE}. "
+            "It ships with the repo; do not delete it."
+        )
+    data = json.loads(INDIA_BOUNDARY_FILE.read_text(encoding="utf-8"))
+    geometry = data["geometry"]
+    poly = shape(geometry)
+    if poly.geom_type == "Polygon":
+        poly = MultiPolygon([poly])
+    return poly
+
+
+def is_point_in_india(lon: float, lat: float, buffer_deg: float | None = None) -> bool:
+    """Return True if (lon, lat) falls inside (or within buffer_deg of) India.
+
+    A small outward buffer absorbs FIRMS point geolocation error so border fires
+    on the India side are not falsely dropped.
+    """
+    if buffer_deg is None:
+        buffer_deg = get_settings().india_boundary_buffer_deg
+    boundary = _india_boundary()
+    if boundary.contains(Point(lon, lat)):
+        return True
+    if buffer_deg > 0:
+        return boundary.buffer(buffer_deg).contains(Point(lon, lat))
+    return False
+
+
+def filter_to_india_boundary(fc: dict, buffer_deg: float | None = None) -> dict:
+    """Drop every fire outside the real India boundary polygon.
+
+    The FIRMS area-API bbox is a rectangle that includes neighbouring countries;
+    this is the actual "India-only" filter and is applied to every live response.
+    """
+    features = fc.get("features", [])
+    total = len(features)
+    kept = [
+        f
+        for f in features
+        if is_point_in_india(*f["geometry"]["coordinates"], buffer_deg=buffer_deg)
+    ]
+    dropped = total - len(kept)
+    if dropped:
+        logger.info(
+            "India boundary filter dropped %s of %s FIRMS detections "
+            "(outside India polygon)",
+            dropped,
+            total,
+        )
+    return {"type": "FeatureCollection", "features": kept}
 
 
 def csv_to_geojson(csv_text: str) -> dict:
@@ -141,7 +218,7 @@ async def fetch_fires(
     try:
         response = await client.get(url)
         response.raise_for_status()
-        return csv_to_geojson(response.text)
+        return filter_to_india_boundary(csv_to_geojson(response.text))
     finally:
         if closer:
             await client.aclose()
