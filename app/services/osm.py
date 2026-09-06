@@ -28,21 +28,24 @@ from ..config import settings
 logger = logging.getLogger(__name__)
 
 OVERPASS_URLS = (
-    "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass-api.de/api/interpreter",
-    "https://overpass.private.coffee/api/interpreter",
+    "https://overpass.openstreetmap.fr/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
+    "https://lz4.overpass-api.de/api/interpreter",
+    "https://z.overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
 )
 
-OVERPASS_RETRIES = 2
-OVERPASS_RETRY_BACKOFF_SECONDS = (3.0, 10.0)
+OVERPASS_RETRIES = 1
+OVERPASS_RETRY_BACKOFF_SECONDS = (2.0,)
 
-# Per-request HTTP timeout. Mirrors that hang get dropped quickly; a healthy
-# mirror either answers fast or 504s (server-side), so waiting 180s on a hung
-# connection is pure wasted time across 100+ tile queries.
-OVERPASS_REQUEST_TIMEOUT_SECONDS = 45.0
+# Per-request HTTP timeout. Fast mirrors respond in 1-3s; drop slow/hung mirrors quickly.
+OVERPASS_REQUEST_TIMEOUT_SECONDS = 12.0
 
-OVERPASS_HEADERS = {"Accept": "application/json"}
+OVERPASS_HEADERS = {
+    "Accept": "application/json",
+    "User-Agent": "SIH26162-FireDetection/1.0 (Mozilla/5.0 compatible)",
+}
 
 OVERPASS_QUERY = "[out:json][timeout:{timeout}];({queries});out body geom;"
 
@@ -316,23 +319,42 @@ async def _fetch_all_tiles(
     return elements, failures["count"]
 
 
+_in_flight_fetches: dict[str, asyncio.Task] = {}
+
+
 async def get_zones(
     zone_type: str,
     client: httpx.AsyncClient | None = None,
-    max_concurrency: int = 1,
+    max_concurrency: int = 4,
 ) -> dict:
     """Return one zone layer as a GeoJSON FeatureCollection.
 
     Serves from a fresh local cache if available; otherwise queries Overpass per
     state, split into tiles, and writes a new cache file. Individual tile
     failures are logged and skipped so a partial dataset still caches and the
-    demo keeps working. `max_concurrency` > 1 parallelizes tiles (saves wall
-    time when a mirror is healthy; stays 1 by default for the live app's sake).
+    demo keeps working.
     """
     cached = read_cache(zone_type)
     if cached is not None:
         return cached
 
+    # Deduplicate concurrent fetch calls for the same zone layer
+    if zone_type in _in_flight_fetches and not _in_flight_fetches[zone_type].done():
+        return await _in_flight_fetches[zone_type]
+
+    task = asyncio.create_task(_get_zones_impl(zone_type, client, max_concurrency))
+    _in_flight_fetches[zone_type] = task
+    try:
+        return await task
+    finally:
+        _in_flight_fetches.pop(zone_type, None)
+
+
+async def _get_zones_impl(
+    zone_type: str,
+    client: httpx.AsyncClient | None = None,
+    max_concurrency: int = 4,
+) -> dict:
     closer = False
     if client is None:
         client = httpx.AsyncClient(timeout=float(settings.overpass_timeout))
@@ -357,14 +379,15 @@ async def get_zones(
 
 async def get_industrial_zones(
     client: httpx.AsyncClient | None = None,
+    max_concurrency: int = 4,
 ) -> dict:
     """Industrial land-use polygons (landuse=industrial) as GeoJSON."""
-    return await get_zones("industrial", client)
+    return await get_zones("industrial", client, max_concurrency)
 
 
 async def get_vegetation_zones(
     client: httpx.AsyncClient | None = None,
-    max_concurrency: int = 1,
+    max_concurrency: int = 4,
 ) -> dict:
     """Forest/vegetation polygons (wood, scrub, forest) as GeoJSON."""
     return await get_zones("vegetation", client, max_concurrency)

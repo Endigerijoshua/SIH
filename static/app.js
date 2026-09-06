@@ -441,7 +441,16 @@ async function loadSites(force = false) {
 async function fetchJson(url) {
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(`${url} -> HTTP ${response.status}`);
+    let detail = "";
+    try {
+      const data = await response.json();
+      if (data && data.detail) {
+        detail = `: ${data.detail}`;
+      }
+    } catch {
+      // Not JSON or empty body
+    }
+    throw new Error(`${url} -> HTTP ${response.status}${detail}`);
   }
   return response.json();
 }

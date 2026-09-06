@@ -26,6 +26,7 @@ conversion.
 """
 
 import logging
+from functools import lru_cache
 
 import pyproj
 from shapely.errors import GEOSException
@@ -47,42 +48,62 @@ def _utm_epsg_for_longitude(lon: float) -> int:
     return 32600 + zone
 
 
+@lru_cache(maxsize=64)
+def _get_transformer(epsg: int) -> pyproj.Transformer:
+    return pyproj.Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+
+
 def _utm_distance_meters(point, polygon: "object") -> float:
     """Project both geometries to the point's UTM zone and measure meters."""
-    transformer = pyproj.Transformer.from_crs(
-        "EPSG:4326", _utm_epsg_for_longitude(point.x), always_xy=True
-    )
+    transformer = _get_transformer(_utm_epsg_for_longitude(point.x))
     projected_point = transform(transformer.transform, point)
     projected_polygon = transform(transformer.transform, polygon)
     return float(projected_polygon.distance(projected_point))
 
 
-def _nearest_distance_meters(point, polygons: list) -> float | None:
+import numpy as np
+
+
+def _nearest_distance_meters(
+    point, polygons: list, tree: STRtree | None = None
+) -> float | None:
     """Nearest distance (meters) from point to any polygon, or None if too far."""
     if not polygons:
         return None
-    tree = STRtree(polygons)
-    candidates_index = tree.query(point.buffer(_SEARCH_PAD_DEGREES))
-    candidates = [polygons[i] for i in candidates_index]
-    if not candidates:
+    if tree is None:
+        tree = STRtree(polygons)
+    idx = tree.query_nearest(point)
+    if idx is None or (hasattr(idx, "__len__") and len(idx) == 0):
         return None
-    nearest = min(_utm_distance_meters(point, poly) for poly in candidates)
+    nearest_idx = int(np.asarray(idx).ravel()[0])
+    nearest_poly = polygons[nearest_idx]
+    if nearest_poly.distance(point) > _SEARCH_PAD_DEGREES:
+        return None
+    nearest = _utm_distance_meters(point, nearest_poly)
     return nearest if nearest <= SEARCH_RADIUS_METERS else None
 
 
-def _nearest_power_plant(point, features: list) -> tuple[float | None, dict | None]:
+def _nearest_power_plant(
+    point,
+    features: list,
+    points: list | None = None,
+    tree: STRtree | None = None,
+) -> tuple[float | None, dict | None]:
     """Nearest power-plant point (meters) + its properties, or (None, None)."""
     if not features:
         return None, None
-    points = [shape(feature["geometry"]) for feature in features]
-    tree = STRtree(points)
-    candidates_index = tree.query(point.buffer(_SEARCH_PAD_DEGREES))
-    candidates = [(features[i], points[i]) for i in candidates_index]
-    if not candidates:
+    if points is None:
+        points = [shape(feature["geometry"]) for feature in features]
+    if tree is None:
+        tree = STRtree(points)
+    idx = tree.query_nearest(point)
+    if idx is None or (hasattr(idx, "__len__") and len(idx) == 0):
         return None, None
-    feature, plant_point = min(
-        candidates, key=lambda fp: _utm_distance_meters(point, fp[1])
-    )
+    nearest_idx = int(np.asarray(idx).ravel()[0])
+    feature = features[nearest_idx]
+    plant_point = points[nearest_idx]
+    if plant_point.distance(point) > _SEARCH_PAD_DEGREES:
+        return None, None
     distance_m = _utm_distance_meters(point, plant_point)
     if distance_m > SEARCH_RADIUS_METERS:
         return None, None
@@ -103,14 +124,14 @@ def nearest_zone_info(
         return None
     polygons = [shape(feature["geometry"]) for feature in features]
     tree = STRtree(polygons)
-    candidates_index = tree.query(point.buffer(_SEARCH_PAD_DEGREES))
-    candidates = [(features[i], polygons[i]) for i in candidates_index]
-    if not candidates:
+    idx = tree.query_nearest(point)
+    if idx is None or (hasattr(idx, "__len__") and len(idx) == 0):
         return None
-    feature, poly = min(
-        candidates,
-        key=lambda fp: _utm_distance_meters(point, fp[1]),
-    )
+    nearest_idx = int(np.asarray(idx).ravel()[0])
+    poly = polygons[nearest_idx]
+    feature = features[nearest_idx]
+    if poly.distance(point) > _SEARCH_PAD_DEGREES:
+        return None
     distance_m = _utm_distance_meters(point, poly)
     if distance_m > search_meters:
         return None
@@ -120,6 +141,22 @@ def nearest_zone_info(
         "osm_id": props.get("osm_id"),
         "distance_m": round(distance_m, 1),
     }
+
+
+_SPATIAL_INDEX_CACHE: dict[int, tuple[list, STRtree | None]] = {}
+
+
+def _get_spatial_index(fc: dict | None) -> tuple[list, STRtree | None]:
+    if not fc or not fc.get("features"):
+        return [], None
+    key = id(fc)
+    cached = _SPATIAL_INDEX_CACHE.get(key)
+    if cached is not None:
+        return cached
+    polygons = [shape(feature["geometry"]) for feature in fc["features"]]
+    tree = STRtree(polygons) if polygons else None
+    _SPATIAL_INDEX_CACHE[key] = (polygons, tree)
+    return polygons, tree
 
 
 def _extract_point(feature: dict):
@@ -149,14 +186,12 @@ def annotate_fires(
     vegetation" definition), else other_natural. `distance_m` is the distance to
     whichever industrial feature (OSM polygon or power plant) is nearest.
     """
-    industrial_polygons = [
-        shape(feature["geometry"]) for feature in industrial_fc["features"]
-    ]
-    vegetation_fc = vegetation_fc or {"type": "FeatureCollection", "features": []}
-    vegetation_polygons = [
-        shape(feature["geometry"]) for feature in vegetation_fc["features"]
-    ]
+    industrial_polygons, industrial_tree = _get_spatial_index(industrial_fc)
+    vegetation_polygons, vegetation_tree = _get_spatial_index(vegetation_fc)
+
     power_plants_fc = power_plants_fc or {"type": "FeatureCollection", "features": []}
+    power_plant_features = power_plants_fc.get("features", [])
+    power_plant_points, power_plant_tree = _get_spatial_index(power_plants_fc)
 
     for feature in fires_fc["features"]:
         prop = feature["properties"]
@@ -173,9 +208,11 @@ def annotate_fires(
         if point is None:
             continue
 
-        industrial_distance = _nearest_distance_meters(point, industrial_polygons)
+        industrial_distance = _nearest_distance_meters(
+            point, industrial_polygons, industrial_tree
+        )
         power_plant_distance, power_plant_props = _nearest_power_plant(
-            point, power_plants_fc["features"]
+            point, power_plant_features, power_plant_points, power_plant_tree
         )
 
         if industrial_distance is not None:
@@ -211,7 +248,9 @@ def annotate_fires(
         if prop["near_industrial"]:
             prop["fire_type_rule"] = "industrial"
 
-        vegetation_distance = _nearest_distance_meters(point, vegetation_polygons)
+        vegetation_distance = _nearest_distance_meters(
+            point, vegetation_polygons, vegetation_tree
+        )
         if vegetation_distance is not None:
             prop["vegetation_distance_m"] = round(vegetation_distance, 1)
             if vegetation_distance <= VEGETATION_BUFFER_METERS:

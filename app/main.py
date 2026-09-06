@@ -8,10 +8,15 @@ import asyncio
 import logging
 from pathlib import Path
 
+# pyrefly: ignore [missing-import]
 import httpx
+# pyrefly: ignore [missing-import]
 from fastapi import FastAPI, HTTPException
+# pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
+# pyrefly: ignore [missing-import]
 from fastapi.responses import FileResponse, HTMLResponse
+# pyrefly: ignore [missing-import]
 from fastapi.staticfiles import StaticFiles
 
 from . import db
@@ -72,9 +77,14 @@ async def get_fires(days: int | None = None) -> dict:
     `days` overrides the FIRMS lookback window (default from settings/.env).
     Every returned detection is also appended to the local SQLite fire_history.
     """
-    fires_fc = await firms.fetch_fires(days=days)
-    db.record_featurecollection(fires_fc)
-    return fires_fc
+    try:
+        fires_fc = await firms.fetch_fires(days=days)
+        db.record_featurecollection(fires_fc)
+        return fires_fc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (httpx.HTTPError, RuntimeError) as exc:
+        raise HTTPException(status_code=502, detail=f"NASA FIRMS API error: {exc}") from exc
 
 
 @app.get("/api/industrial-zones")
@@ -107,14 +117,19 @@ async def get_power_plants() -> dict:
 @app.get("/api/flagged-fires")
 async def get_flagged_fires(days: int | None = None) -> dict:
     """Live fires annotated with rule-based + ML fire type and persistence."""
-    fires_fc = await firms.fetch_fires(days=days)
-    db.record_featurecollection(fires_fc)
-    industrial_fc, vegetation_fc, power_plants_fc = await _reference_layers()
-    spatial.annotate_fires(fires_fc, industrial_fc, vegetation_fc, power_plants_fc)
-    persistence.annotate_persistence(fires_fc)
-    ml.annotate_fire_type_ml(fires_fc)
-    summary.add_summary(fires_fc)
-    return fires_fc
+    try:
+        fires_fc = await firms.fetch_fires(days=days)
+        db.record_featurecollection(fires_fc)
+        industrial_fc, vegetation_fc, power_plants_fc = await _reference_layers()
+        spatial.annotate_fires(fires_fc, industrial_fc, vegetation_fc, power_plants_fc)
+        persistence.annotate_persistence(fires_fc)
+        ml.annotate_fire_type_ml(fires_fc)
+        summary.add_summary(fires_fc)
+        return fires_fc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (httpx.HTTPError, RuntimeError) as exc:
+        raise HTTPException(status_code=502, detail=f"Upstream API error: {exc}") from exc
 
 
 async def _reference_layers() -> tuple[dict, dict, dict]:
@@ -130,13 +145,18 @@ async def _reference_layers() -> tuple[dict, dict, dict]:
 @app.get("/api/thermal-sites")
 async def get_thermal_sites(days: int | None = None) -> dict:
     """DBSCAN-cluster persistent recurrences into named industrial sites."""
-    fires_fc = await firms.fetch_fires(days=days)
-    db.record_featurecollection(fires_fc)
-    industrial_fc, vegetation_fc, power_plants_fc = await _reference_layers()
-    spatial.annotate_fires(fires_fc, industrial_fc, vegetation_fc, power_plants_fc)
-    persistence.annotate_persistence(fires_fc)
-    ml.annotate_fire_type_ml(fires_fc)
-    return clustering.cluster_persistent_fires(fires_fc, industrial_fc)
+    try:
+        fires_fc = await firms.fetch_fires(days=days)
+        db.record_featurecollection(fires_fc)
+        industrial_fc, vegetation_fc, power_plants_fc = await _reference_layers()
+        spatial.annotate_fires(fires_fc, industrial_fc, vegetation_fc, power_plants_fc)
+        persistence.annotate_persistence(fires_fc)
+        ml.annotate_fire_type_ml(fires_fc)
+        return clustering.cluster_persistent_fires(fires_fc, industrial_fc)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (httpx.HTTPError, RuntimeError) as exc:
+        raise HTTPException(status_code=502, detail=f"Upstream API error: {exc}") from exc
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
