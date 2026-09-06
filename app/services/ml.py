@@ -156,10 +156,28 @@ def annotate_fire_type_ml(features_fc: dict) -> dict:
             feature["properties"]["fire_type_ml_confidence"] = None
         return features_fc
 
-    for feature in features_fc["features"]:
+    import time as _time
+
+    _t0 = _time.perf_counter()
+    logger.info(
+        "ml.annotate_fire_type_ml: START (%d fires)",
+        len(features_fc.get("features", [])),
+    )
+    samples = np.vstack(
+        [
+            features_from_props(feature["properties"])
+            for feature in features_fc["features"]
+        ]
+    )
+    probas = model.predict_proba(samples)
+    classes = np.asarray(model.classes_)
+    for feature, probs in zip(features_fc["features"], probas):
         properties = feature["properties"]
-        sample = features_from_props(properties).reshape(1, -1)
-        probas = model.predict_proba(sample)[0]
-        properties["fire_type_ml"] = str(model.predict(sample)[0])
-        properties["fire_type_ml_confidence"] = float(probas.max())
+        properties["fire_type_ml"] = str(classes[int(np.argmax(probs))])
+        properties["fire_type_ml_confidence"] = float(probs.max())
+    logger.info(
+        "ml.annotate_fire_type_ml: END (%d fires in %.2fs)",
+        len(features_fc.get("features", [])),
+        _time.perf_counter() - _t0,
+    )
     return features_fc

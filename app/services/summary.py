@@ -13,8 +13,12 @@ Fields added to each fire's properties:
 - `explanation` — one-line "why we think this" (the rule that fired)
 """
 
+import logging
+
 from ..config import settings
 from .spatial import NEAR_BUFFER_METERS, VEGETATION_BUFFER_METERS
+
+logger = logging.getLogger(__name__)
 
 NEAR_KM = NEAR_BUFFER_METERS / 1000  # industrial: 1 km
 VEGETATION_KM = VEGETATION_BUFFER_METERS / 1000  # forest: 3 km
@@ -119,6 +123,12 @@ def add_summary(fires_fc: dict) -> dict:
 
     Mutates and returns the input FeatureCollection.
     """
+    import time as _time
+
+    _t0 = _time.perf_counter()
+    logger.info(
+        "summary.add_summary: START (%d fires)", len(fires_fc.get("features", []))
+    )
     for feature in fires_fc["features"]:
         prop = feature["properties"]
         rule = prop.get("fire_type_rule")
@@ -149,4 +159,9 @@ def add_summary(fires_fc: dict) -> dict:
         )
         prop["summary_persistent"] = persistent or None
         prop["explanation"] = _explanation(prop)
+    logger.info(
+        "summary.add_summary: END (%d fires in %.2fs)",
+        len(fires_fc.get("features", [])),
+        _time.perf_counter() - _t0,
+    )
     return fires_fc

@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db
+from .config import settings
 from .services import (
     clustering,
     firms,
@@ -27,6 +28,7 @@ from .services import (
 )
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="SIH26162 Industrial Fire Detection",
@@ -109,22 +111,74 @@ async def get_flagged_fires(days: int | None = None) -> dict:
     """Live fires annotated with rule-based + ML fire type and persistence."""
     fires_fc = await firms.fetch_fires(days=days)
     db.record_featurecollection(fires_fc)
+    logger.info("[flagged-fires] %d fires fetched", len(fires_fc.get("features", [])))
     industrial_fc, vegetation_fc, power_plants_fc = await _reference_layers()
-    spatial.annotate_fires(fires_fc, industrial_fc, vegetation_fc, power_plants_fc)
+    logger.info(
+        "[flagged-fires] reference layers loaded: %d industrial, %d vegetation, %d power plants",
+        len(industrial_fc.get("features", [])),
+        len(vegetation_fc.get("features", [])),
+        len(power_plants_fc.get("features", [])),
+    )
+    logger.info("[flagged-fires] START spatial.annotate_fires")
+    spatial.annotate_fires(
+        fires_fc,
+        industrial_fc,
+        vegetation_fc,
+        power_plants_fc,
+        cache_version=_reference_cache_version(),
+    )
+    logger.info("[flagged-fires] END spatial.annotate_fires")
+    logger.info("[flagged-fires] START persistence.annotate_persistence")
     persistence.annotate_persistence(fires_fc)
+    logger.info("[flagged-fires] END persistence.annotate_persistence")
+    logger.info("[flagged-fires] START ml.annotate_fire_type_ml")
     ml.annotate_fire_type_ml(fires_fc)
+    logger.info("[flagged-fires] END ml.annotate_fire_type_ml")
+    logger.info("[flagged-fires] START summary.add_summary")
     summary.add_summary(fires_fc)
+    logger.info("[flagged-fires] END summary.add_summary")
+    logger.info("[flagged-fires] complete: %d fires", len(fires_fc.get("features", [])))
     return fires_fc
 
 
 async def _reference_layers() -> tuple[dict, dict, dict]:
     """Fetch industrial + vegetation zones and power plants in parallel."""
+    logger.info("_reference_layers: START fetch")
     industrial_fc, vegetation_fc, power_plants_fc = await asyncio.gather(
         osm.get_industrial_zones(),
         osm.get_vegetation_zones(),
         powerplants.get_power_plants(),
     )
+    logger.info(
+        "_reference_layers: END fetch (%d industrial, %d vegetation, %d power plants)",
+        len(industrial_fc.get("features", [])),
+        len(vegetation_fc.get("features", [])),
+        len(power_plants_fc.get("features", [])),
+    )
     return industrial_fc, vegetation_fc, power_plants_fc
+
+
+def _reference_cache_version() -> str:
+    """Fingerprint the reference-layer disk caches so spatial can reuse its
+    parsed geometry + STRtree while the underlying cache files are unchanged.
+
+    Uses file size + mtime (cheap); any refresh of a cache file changes it, so
+    the next request rebuilds the reference index instead of serving stale
+    geometry. This removes a ~20-30 s `shape()` parse from every request.
+    """
+    parts = []
+    for name in (
+        "industrial_cache_file",
+        "vegetation_cache_file",
+        "power_plants_cache_file",
+    ):
+        path = Path(getattr(settings, name, name))
+        try:
+            stat = path.stat()
+            parts.append(f"{path.name}:{stat.st_size}:{stat.st_mtime:.0f}")
+        except OSError:
+            parts.append(f"{name}:missing")
+    return "|".join(parts)
 
 
 @app.get("/api/thermal-sites")
@@ -133,7 +187,13 @@ async def get_thermal_sites(days: int | None = None) -> dict:
     fires_fc = await firms.fetch_fires(days=days)
     db.record_featurecollection(fires_fc)
     industrial_fc, vegetation_fc, power_plants_fc = await _reference_layers()
-    spatial.annotate_fires(fires_fc, industrial_fc, vegetation_fc, power_plants_fc)
+    spatial.annotate_fires(
+        fires_fc,
+        industrial_fc,
+        vegetation_fc,
+        power_plants_fc,
+        cache_version=_reference_cache_version(),
+    )
     persistence.annotate_persistence(fires_fc)
     ml.annotate_fire_type_ml(fires_fc)
     return clustering.cluster_persistent_fires(fires_fc, industrial_fc)

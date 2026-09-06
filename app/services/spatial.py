@@ -26,6 +26,7 @@ conversion.
 """
 
 import logging
+from functools import lru_cache
 
 import pyproj
 from shapely.errors import GEOSException
@@ -47,46 +48,74 @@ def _utm_epsg_for_longitude(lon: float) -> int:
     return 32600 + zone
 
 
+@lru_cache(maxsize=16)
+def _transformer_for_zone(zone: int):
+    """Return a cached EPSG:4326 → UTM transformer for a longitude.
+
+    Creating a pyproj Transformer is surprisingly expensive (~10s of µs) and
+    doing it once per candidate polygon was eating minutes on the 150k-polygon
+    vegetation layer. Caching per UTM zone cuts that to a handful of objects.
+    """
+    return pyproj.Transformer.from_crs("EPSG:4326", f"EPSG:{zone}", always_xy=True)
+
+
 def _utm_distance_meters(point, polygon: "object") -> float:
     """Project both geometries to the point's UTM zone and measure meters."""
-    transformer = pyproj.Transformer.from_crs(
-        "EPSG:4326", _utm_epsg_for_longitude(point.x), always_xy=True
-    )
+    zone = _utm_epsg_for_longitude(point.x)
+    transformer = _transformer_for_zone(zone)
     projected_point = transform(transformer.transform, point)
     projected_polygon = transform(transformer.transform, polygon)
     return float(projected_polygon.distance(projected_point))
 
 
-def _nearest_distance_meters(point, polygons: list) -> float | None:
-    """Nearest distance (meters) from point to any polygon, or None if too far."""
+def _nearest_distance_meters(
+    point, polygons: list, tree: STRtree | None = None
+) -> float | None:
+    """Nearest distance (meters) from point to any polygon, or None if too far.
+
+    `tree` may be prebuilt and reused across many points — building the STRtree
+    once per annotate pass instead of per fire is a large speedup (the
+    vegetation set is ~150k polygons). Uses STRtree.query_nearest (a native
+    GEOS nearest-neighbor lookup) to pull back a single candidate instead of
+    buffering the point and measuring every polygon within the pad — measuring
+    every candidate re-projected in UTM was minutes per pass.
+    """
     if not polygons:
         return None
-    tree = STRtree(polygons)
-    candidates_index = tree.query(point.buffer(_SEARCH_PAD_DEGREES))
-    candidates = [polygons[i] for i in candidates_index]
-    if not candidates:
+    if tree is None:
+        tree = STRtree(polygons)
+    candidates_index = tree.query_nearest(
+        point, max_distance=_SEARCH_PAD_DEGREES, all_matches=False
+    )
+    if len(candidates_index) == 0:
         return None
-    nearest = min(_utm_distance_meters(point, poly) for poly in candidates)
+    nearest = _utm_distance_meters(point, polygons[int(candidates_index[0])])
     return nearest if nearest <= SEARCH_RADIUS_METERS else None
 
 
-def _nearest_power_plant(point, features: list) -> tuple[float | None, dict | None]:
+def _nearest_power_plant(
+    point,
+    features: list,
+    points: list | None = None,
+    tree: STRtree | None = None,
+) -> tuple[float | None, dict | None]:
     """Nearest power-plant point (meters) + its properties, or (None, None)."""
     if not features:
         return None, None
-    points = [shape(feature["geometry"]) for feature in features]
-    tree = STRtree(points)
-    candidates_index = tree.query(point.buffer(_SEARCH_PAD_DEGREES))
-    candidates = [(features[i], points[i]) for i in candidates_index]
-    if not candidates:
-        return None, None
-    feature, plant_point = min(
-        candidates, key=lambda fp: _utm_distance_meters(point, fp[1])
+    if points is None:
+        points = [shape(feature["geometry"]) for feature in features]
+    if tree is None:
+        tree = STRtree(points)
+    candidates_index = tree.query_nearest(
+        point, max_distance=_SEARCH_PAD_DEGREES, all_matches=False
     )
-    distance_m = _utm_distance_meters(point, plant_point)
+    if len(candidates_index) == 0:
+        return None, None
+    i = int(candidates_index[0])
+    distance_m = _utm_distance_meters(point, points[i])
     if distance_m > SEARCH_RADIUS_METERS:
         return None, None
-    return round(distance_m, 1), feature["properties"] or {}
+    return round(distance_m, 1), features[i]["properties"] or {}
 
 
 def nearest_zone_info(
@@ -103,14 +132,14 @@ def nearest_zone_info(
         return None
     polygons = [shape(feature["geometry"]) for feature in features]
     tree = STRtree(polygons)
-    candidates_index = tree.query(point.buffer(_SEARCH_PAD_DEGREES))
-    candidates = [(features[i], polygons[i]) for i in candidates_index]
-    if not candidates:
-        return None
-    feature, poly = min(
-        candidates,
-        key=lambda fp: _utm_distance_meters(point, fp[1]),
+    candidates_index = tree.query_nearest(
+        point, max_distance=_SEARCH_PAD_DEGREES, all_matches=False
     )
+    if len(candidates_index) == 0:
+        return None
+    i = int(candidates_index[0])
+    poly = polygons[i]
+    feature = features[i]
     distance_m = _utm_distance_meters(point, poly)
     if distance_m > search_meters:
         return None
@@ -134,11 +163,47 @@ def _extract_point(feature: dict):
     return point
 
 
+# Parsed+indexed reference layers, keyed by the caller's `cache_version`
+# fingerprint (main.py derives it from the reference-layer cache-file
+# size+mtime). Without a fingerprint (e.g. tests passing small inline layers)
+# nothing is cached, so two different FeatureCollections with the same length
+# can never accidentally share geometry. Rebuilding with `shape()` over the
+# ~150k vegetation polygons costs ~20-30 s, so a live demo must reuse it.
+_REFERENCE_CACHE: dict[str, dict] = {}
+
+
+def _build_reference_bundle(
+    industrial_fc: dict,
+    vegetation_fc: dict,
+    power_plants_fc: dict,
+) -> dict:
+    """Parse the three reference layers into shapely geometry + STRtree."""
+    industrial_polygons = [
+        shape(feature["geometry"]) for feature in industrial_fc["features"]
+    ]
+    vegetation_polygons = [
+        shape(feature["geometry"]) for feature in vegetation_fc["features"]
+    ]
+    power_plant_points = [
+        shape(feature["geometry"]) for feature in power_plants_fc["features"]
+    ]
+    return {
+        "industrial_polygons": industrial_polygons,
+        "vegetation_polygons": vegetation_polygons,
+        "power_plant_features": power_plants_fc["features"],
+        "power_plant_points": power_plant_points,
+        "industrial_tree": STRtree(industrial_polygons),
+        "vegetation_tree": STRtree(vegetation_polygons),
+        "power_plant_tree": STRtree(power_plant_points) if power_plant_points else None,
+    }
+
+
 def annotate_fires(
     fires_fc: dict,
     industrial_fc: dict,
     vegetation_fc: dict | None = None,
     power_plants_fc: dict | None = None,
+    cache_version: str | None = None,
 ) -> dict:
     """Add rule-based fire type + proximity flags to every fire feature.
 
@@ -148,17 +213,65 @@ def annotate_fires(
     polygons are conservative, so a wider radius is a fairer "near natural
     vegetation" definition), else other_natural. `distance_m` is the distance to
     whichever industrial feature (OSM polygon or power plant) is nearest.
+
+    `cache_version` (optional) is a caller-held fingerprint identifying the
+    reference layers. Pass it from the live endpoints (main.py computes it from
+    the reference-layer cache files) so the parsed geometry + STRtree are built
+    once and reused until the cache files actually change.
     """
-    industrial_polygons = [
-        shape(feature["geometry"]) for feature in industrial_fc["features"]
-    ]
     vegetation_fc = vegetation_fc or {"type": "FeatureCollection", "features": []}
-    vegetation_polygons = [
-        shape(feature["geometry"]) for feature in vegetation_fc["features"]
-    ]
     power_plants_fc = power_plants_fc or {"type": "FeatureCollection", "features": []}
 
-    for feature in fires_fc["features"]:
+    if cache_version is not None:
+        bundle = _REFERENCE_CACHE.get(cache_version)
+        if bundle is None:
+            logger.info(
+                "spatial.annotate_fires: building reference index for %s (%.0fs)",
+                cache_version,
+                len(industrial_fc.get("features", [])),
+            )
+            bundle = _build_reference_bundle(
+                industrial_fc, vegetation_fc, power_plants_fc
+            )
+            _REFERENCE_CACHE.clear()  # only one live dataset in memory at a time
+            _REFERENCE_CACHE[cache_version] = bundle
+        else:
+            logger.info(
+                "spatial.annotate_fires: reusing cached reference index (%s)",
+                cache_version,
+            )
+        industrial_polygons = bundle["industrial_polygons"]
+        vegetation_polygons = bundle["vegetation_polygons"]
+        power_plant_points = bundle["power_plant_points"]
+        industrial_tree = bundle["industrial_tree"]
+        vegetation_tree = bundle["vegetation_tree"]
+        power_plant_tree = bundle["power_plant_tree"]
+    else:
+        industrial_polygons = [
+            shape(feature["geometry"]) for feature in industrial_fc["features"]
+        ]
+        vegetation_polygons = [
+            shape(feature["geometry"]) for feature in vegetation_fc["features"]
+        ]
+        power_plant_points = [
+            shape(feature["geometry"]) for feature in power_plants_fc["features"]
+        ]
+        industrial_tree = STRtree(industrial_polygons)
+        vegetation_tree = STRtree(vegetation_polygons)
+        power_plant_tree = STRtree(power_plant_points) if power_plant_points else None
+
+    import time as _time
+
+    _t0 = _time.perf_counter()
+    logger.info(
+        "spatial.annotate_fires: START (%d fires; %d industrial, %d vegetation, %d power plants)",
+        len(fires_fc.get("features", [])),
+        len(industrial_polygons),
+        len(vegetation_polygons),
+        len(power_plant_points),
+    )
+
+    for i, feature in enumerate(fires_fc["features"]):
         prop = feature["properties"]
         prop["near_industrial"] = False
         prop["distance_m"] = None
@@ -173,9 +286,14 @@ def annotate_fires(
         if point is None:
             continue
 
-        industrial_distance = _nearest_distance_meters(point, industrial_polygons)
+        industrial_distance = _nearest_distance_meters(
+            point, industrial_polygons, industrial_tree
+        )
         power_plant_distance, power_plant_props = _nearest_power_plant(
-            point, power_plants_fc["features"]
+            point,
+            power_plants_fc["features"],
+            power_plant_points,
+            power_plant_tree,
         )
 
         if industrial_distance is not None:
@@ -211,7 +329,9 @@ def annotate_fires(
         if prop["near_industrial"]:
             prop["fire_type_rule"] = "industrial"
 
-        vegetation_distance = _nearest_distance_meters(point, vegetation_polygons)
+        vegetation_distance = _nearest_distance_meters(
+            point, vegetation_polygons, vegetation_tree
+        )
         if vegetation_distance is not None:
             prop["vegetation_distance_m"] = round(vegetation_distance, 1)
             if vegetation_distance <= VEGETATION_BUFFER_METERS:
@@ -219,4 +339,9 @@ def annotate_fires(
                 if prop["fire_type_rule"] == "other_natural":
                     prop["fire_type_rule"] = "forest"
 
+    logger.info(
+        "spatial.annotate_fires: END (%d fires processed in %.2fs)",
+        len(fires_fc.get("features", [])),
+        _time.perf_counter() - _t0,
+    )
     return fires_fc
