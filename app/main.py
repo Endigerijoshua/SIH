@@ -8,13 +8,23 @@ import asyncio
 import logging
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db
-from .services import clustering, firms, osm, persistence, spatial
+from .services import (
+    clustering,
+    firms,
+    ml,
+    osm,
+    persistence,
+    powerplants,
+    spatial,
+    summary,
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -85,23 +95,36 @@ async def get_vegetation_zones() -> dict:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+@app.get("/api/power-plants")
+async def get_power_plants() -> dict:
+    """India power plants (WRI Global Power Plant Database) as point GeoJSON."""
+    try:
+        return await powerplants.get_power_plants()
+    except (RuntimeError, httpx.HTTPError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @app.get("/api/flagged-fires")
 async def get_flagged_fires(days: int | None = None) -> dict:
-    """Live fires annotated with fire type + industrial/persistence metadata."""
+    """Live fires annotated with rule-based + ML fire type and persistence."""
     fires_fc = await firms.fetch_fires(days=days)
     db.record_featurecollection(fires_fc)
-    industrial_fc, vegetation_fc = await _osm_layers()
-    spatial.annotate_fires(fires_fc, industrial_fc, vegetation_fc)
+    industrial_fc, vegetation_fc, power_plants_fc = await _reference_layers()
+    spatial.annotate_fires(fires_fc, industrial_fc, vegetation_fc, power_plants_fc)
     persistence.annotate_persistence(fires_fc)
+    ml.annotate_fire_type_ml(fires_fc)
+    summary.add_summary(fires_fc)
     return fires_fc
 
 
-async def _osm_layers() -> tuple[dict, dict]:
-    """Fetch industrial + vegetation zone layers in parallel."""
-    industrial_fc, vegetation_fc = await asyncio.gather(
-        osm.get_industrial_zones(), osm.get_vegetation_zones()
+async def _reference_layers() -> tuple[dict, dict, dict]:
+    """Fetch industrial + vegetation zones and power plants in parallel."""
+    industrial_fc, vegetation_fc, power_plants_fc = await asyncio.gather(
+        osm.get_industrial_zones(),
+        osm.get_vegetation_zones(),
+        powerplants.get_power_plants(),
     )
-    return industrial_fc, vegetation_fc
+    return industrial_fc, vegetation_fc, power_plants_fc
 
 
 @app.get("/api/thermal-sites")
@@ -109,9 +132,10 @@ async def get_thermal_sites(days: int | None = None) -> dict:
     """DBSCAN-cluster persistent recurrences into named industrial sites."""
     fires_fc = await firms.fetch_fires(days=days)
     db.record_featurecollection(fires_fc)
-    industrial_fc, vegetation_fc = await _osm_layers()
-    spatial.annotate_fires(fires_fc, industrial_fc, vegetation_fc)
+    industrial_fc, vegetation_fc, power_plants_fc = await _reference_layers()
+    spatial.annotate_fires(fires_fc, industrial_fc, vegetation_fc, power_plants_fc)
     persistence.annotate_persistence(fires_fc)
+    ml.annotate_fire_type_ml(fires_fc)
     return clustering.cluster_persistent_fires(fires_fc, industrial_fc)
 
 

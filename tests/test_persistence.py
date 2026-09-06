@@ -30,9 +30,7 @@ def _feature(lat, lon, acq_date, satellite="T"):
 
 
 def _record(fc):
-    return db.record_featurecollection(
-        {"type": "FeatureCollection", "features": fc}
-    )
+    return db.record_featurecollection({"type": "FeatureCollection", "features": fc})
 
 
 def _days_ago(*offsets):

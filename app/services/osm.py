@@ -1,15 +1,20 @@
 """OpenStreetMap zone fetch via the Overpass API (industrial + vegetation).
 
 Queries industrial (`landuse=industrial`) and vegetation (`natural=wood`,
-`natural=scrub`, `landuse=forest`) polygons for a set of regional bboxes
-(Gujarat, Jharkhand, Maharashtra — the full-India box is too slow / times out),
-converts the Overpass JSON response into GeoJSON FeatureCollections, and caches
-each layer to its own local file so Overpass is not hit on every request.
+`natural=scrub`, `landuse=forest`) polygons for a set of regional state bboxes
+(whole-India box is too slow / times out), converts the Overpass JSON response
+into GeoJSON FeatureCollections, and caches each layer to its own local file so
+Overpass is not hit on every request.
 
 The primary mirror at overpass-api.de consistently rejected requests with 406
-during development, so queries go straight to the kumi mirror.
+during development, so queries go straight to the kumi mirror. Queries stay to a
+minimal tag set per tile: every extra union clause measurably increases Overpass
+504 rates (verified while expanding coverage to more states). Each mirror is
+retried a few times with a short backoff because transient 504s are common under
+load and a later attempt usually succeeds (only mirror exhausts do we skip a tile).
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -22,7 +27,20 @@ from ..config import settings
 
 logger = logging.getLogger(__name__)
 
-OVERPASS_URLS = ("https://overpass.kumi.systems/api/interpreter",)
+OVERPASS_URLS = (
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+)
+
+OVERPASS_RETRIES = 2
+OVERPASS_RETRY_BACKOFF_SECONDS = (3.0, 10.0)
+
+# Per-request HTTP timeout. Mirrors that hang get dropped quickly; a healthy
+# mirror either answers fast or 504s (server-side), so waiting 180s on a hung
+# connection is pure wasted time across 100+ tile queries.
+OVERPASS_REQUEST_TIMEOUT_SECONDS = 45.0
 
 OVERPASS_HEADERS = {"Accept": "application/json"}
 
@@ -207,46 +225,109 @@ async def fetch_region(
     client: httpx.AsyncClient,
     timeout: int,
 ) -> list[dict]:
-    """Query each configured Overpass instance in order, returning first success."""
+    """Query mirrors in order, retrying transient failures, until one succeeds."""
     query = build_query(west, south, east, north, zone_type, timeout)
     last_error: Exception | None = None
     for base_url in OVERPASS_URLS:
-        try:
-            logger.info(
-                "querying %s for %s bbox %s,%s,%s,%s",
-                base_url,
-                zone_type,
-                west,
-                south,
-                east,
-                north,
-            )
-            response = await client.get(
-                base_url,
-                params={"data": query},
-                headers=OVERPASS_HEADERS,
-                timeout=float(timeout),
-            )
-            response.raise_for_status()
-            return response.json().get("elements", [])
-        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            last_error = exc
-            logger.warning("%s failed (%s) — trying next mirror", base_url, exc)
+        for attempt in range(OVERPASS_RETRIES):
+            try:
+                logger.info(
+                    "querying %s (attempt %d/%d) for %s bbox %s,%s,%s,%s",
+                    base_url,
+                    attempt + 1,
+                    OVERPASS_RETRIES,
+                    zone_type,
+                    west,
+                    south,
+                    east,
+                    north,
+                )
+                response = await client.get(
+                    base_url,
+                    params={"data": query},
+                    headers=OVERPASS_HEADERS,
+                    timeout=OVERPASS_REQUEST_TIMEOUT_SECONDS,
+                )
+                response.raise_for_status()
+                return response.json().get("elements", [])
+            except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+                last_error = exc
+                retriable = isinstance(exc, httpx.RequestError) or (
+                    isinstance(exc, httpx.HTTPStatusError)
+                    and exc.response.status_code in (429, 502, 503, 504)
+                )
+                if retriable and attempt + 1 < OVERPASS_RETRIES:
+                    sleep_s = OVERPASS_RETRY_BACKOFF_SECONDS[
+                        min(attempt, len(OVERPASS_RETRY_BACKOFF_SECONDS) - 1)
+                    ]
+                    logger.warning(
+                        "%s failed (%s) — retrying in %ss", base_url, exc, sleep_s
+                    )
+                    await asyncio.sleep(sleep_s)
+                    continue
+                logger.warning("%s failed (%s) — trying next mirror", base_url, exc)
+                break
     raise RuntimeError(
         f"Overpass unavailable for {zone_type} bbox "
         f"{west},{south},{east},{north}: {last_error}"
     )
 
 
+async def _fetch_one(
+    zone_type: str,
+    state: str,
+    tile: tuple[float, float, float, float],
+    client: httpx.AsyncClient,
+    timeout: int,
+    semaphore: asyncio.Semaphore,
+    failures: dict,
+) -> list[dict]:
+    """Fetch one tile under a shared concurrency limit; logs and skips on failure."""
+    async with semaphore:
+        try:
+            return await fetch_region(*tile, zone_type, client, timeout)
+        except RuntimeError as exc:
+            failures["count"] += 1
+            logger.error(
+                "skipping %s tile %s of %s after %s",
+                zone_type,
+                tile,
+                state,
+                exc,
+            )
+            return []
+
+
+async def _fetch_all_tiles(
+    zone_type: str, client: httpx.AsyncClient, timeout: int, max_concurrency: int
+) -> tuple[list[dict], int]:
+    """Query every state bbox tile for the layer, respecting a concurrency cap."""
+    semaphore = asyncio.Semaphore(max_concurrency)
+    failures = {"count": 0}
+    tasks = []
+    for state, bbox in settings.industrial_states.items():
+        west, south, east, north = parse_state_bbox(bbox)
+        for tile in tile_bbox(west, south, east, north):
+            tasks.append(
+                _fetch_one(zone_type, state, tile, client, timeout, semaphore, failures)
+            )
+    results = await asyncio.gather(*tasks)
+    elements = [element for group in results for element in group]
+    return elements, failures["count"]
+
+
 async def get_zones(
-    zone_type: str, client: httpx.AsyncClient | None = None
+    zone_type: str,
+    client: httpx.AsyncClient | None = None,
+    max_concurrency: int = 1,
 ) -> dict:
     """Return one zone layer as a GeoJSON FeatureCollection.
 
     Serves from a fresh local cache if available; otherwise queries Overpass per
     state, split into tiles, and writes a new cache file. Individual tile
     failures are logged and skipped so a partial dataset still caches and the
-    demo keeps working.
+    demo keeps working. `max_concurrency` > 1 parallelizes tiles (saves wall
+    time when a mirror is healthy; stays 1 by default for the live app's sake).
     """
     cached = read_cache(zone_type)
     if cached is not None:
@@ -257,25 +338,9 @@ async def get_zones(
         client = httpx.AsyncClient(timeout=float(settings.overpass_timeout))
         closer = True
     try:
-        elements: list[dict] = []
-        failures = 0
-        for state, bbox in settings.industrial_states.items():
-            west, south, east, north = parse_state_bbox(bbox)
-            for tile in tile_bbox(west, south, east, north):
-                try:
-                    tile_elements = await fetch_region(
-                        *tile, zone_type, client, settings.overpass_timeout
-                    )
-                    elements.extend(tile_elements)
-                except RuntimeError as exc:
-                    failures += 1
-                    logger.error(
-                        "skipping %s tile %s of %s after %s",
-                        zone_type,
-                        tile,
-                        state,
-                        exc,
-                    )
+        elements, failures = await _fetch_all_tiles(
+            zone_type, client, settings.overpass_timeout, max_concurrency
+        )
         logger.info(
             "%s: %s ways total, %s tile(s) failed",
             zone_type,
@@ -299,6 +364,7 @@ async def get_industrial_zones(
 
 async def get_vegetation_zones(
     client: httpx.AsyncClient | None = None,
+    max_concurrency: int = 1,
 ) -> dict:
     """Forest/vegetation polygons (wood, scrub, forest) as GeoJSON."""
-    return await get_zones("vegetation", client)
+    return await get_zones("vegetation", client, max_concurrency)

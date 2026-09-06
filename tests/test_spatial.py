@@ -82,11 +82,34 @@ FIRE_IN_BOTH = {
 
 FOREST_FC = {"type": "FeatureCollection", "features": [FOREST_POLY]}
 
+# WRI-style power-plant points. One sits right next to the OSM polygon (so a
+# fire there matches both sources); one sits far from any OSM polygon.
+POWER_PLANT_NEAR = {
+    "type": "Feature",
+    "id": "wri-pp-1",
+    "geometry": {"type": "Point", "coordinates": [72.55, 22.506]},
+    "properties": {"name": "Halo Thermal", "source": "power_plant_db"},
+}
+POWER_PLANT_SOLO = {
+    "type": "Feature",
+    "id": "wri-pp-2",
+    "geometry": {"type": "Point", "coordinates": [74.05, 15.0]},
+    "properties": {"name": "Solo Thermal", "source": "power_plant_db"},
+}
 
-def _run(fires, vegetation_fc=None):
+# A fire ~440 m south of the solo power plant, far from any OSM polygon.
+FIRE_SOLO_NEAR_PLANT = {
+    "type": "Feature",
+    "id": 6,
+    "geometry": {"type": "Point", "coordinates": [74.05, 15.004]},
+    "properties": {},
+}
+
+
+def _run(fires, vegetation_fc=None, power_plants_fc=None):
     fc = {"type": "FeatureCollection", "features": fires}
     zones = {"type": "FeatureCollection", "features": [PLANT_POLY]}
-    return spatial.annotate_fires(fc, zones, vegetation_fc)["features"]
+    return spatial.annotate_fires(fc, zones, vegetation_fc, power_plants_fc)["features"]
 
 
 def test_fire_inside_zone_flagged():
@@ -117,26 +140,74 @@ def test_fire_far_away_not_flagged():
 
 
 def test_all_features_have_annotation_fields():
-    feats = _run([FIRE_INSIDE, FIRE_500M_AWAY, FIRE_1_3KM_AWAY, FIRE_FAR_AWAY])
+    feats = _run(
+        [
+            FIRE_INSIDE,
+            FIRE_500M_AWAY,
+            FIRE_1_3KM_AWAY,
+            FIRE_FAR_AWAY,
+            FIRE_SOLO_NEAR_PLANT,
+        ]
+    )
     for feat in feats:
         assert "near_industrial" in feat["properties"]
         assert "distance_m" in feat["properties"]
-        assert "fire_type" in feat["properties"]
+        assert "fire_type_rule" in feat["properties"]
         assert "near_vegetation" in feat["properties"]
         assert "vegetation_distance_m" in feat["properties"]
+        assert "near_power_plant" in feat["properties"]
+        assert "power_plant_distance_m" in feat["properties"]
+        assert "industrial_match_source" in feat["properties"]
     assert sum(f["properties"]["near_industrial"] for f in feats) == 2
 
 
-def test_fire_inside_industrial_zone_fire_type_industrial():
+def test_fire_near_power_plant_only_is_industrial():
+    pp = {"type": "FeatureCollection", "features": [POWER_PLANT_SOLO]}
+    feats = _run([FIRE_SOLO_NEAR_PLANT], power_plants_fc=pp)
+    prop = feats[0]["properties"]
+    assert prop["fire_type_rule"] == "industrial"
+    assert prop["near_industrial"] is True
+    assert prop["near_power_plant"] is True
+    assert prop["industrial_match_source"] == "power_plant_db"
+    assert prop["power_plant_distance_m"] <= 500
+    assert prop["power_plant_name"] == "Solo Thermal"
+
+
+def test_fire_near_power_plant_and_osm_marks_both():
+    pp = {"type": "FeatureCollection", "features": [POWER_PLANT_NEAR]}
+    feats = _run([FIRE_500M_AWAY], power_plants_fc=pp)
+    prop = feats[0]["properties"]
+    assert prop["near_industrial"] is True
+    assert prop["industrial_match_source"] == "both"
+    assert prop["near_power_plant"] is True
+    assert prop["distance_m"] <= 300  # power plant is the nearer source
+
+
+def test_power_plant_within_radar_but_over_1km_not_industrial():
+    plant = {
+        "type": "Feature",
+        "id": "wri-pp-3",
+        "geometry": {"type": "Point", "coordinates": [72.55, 22.463]},
+        "properties": {"name": "Far Plant", "source": "power_plant_db"},
+    }
+    pp = {"type": "FeatureCollection", "features": [plant]}
+    feats = _run([FIRE_INSIDE], power_plants_fc=pp)
+    prop = feats[0]["properties"]
+    assert prop["near_power_plant"] is False
+    assert prop["power_plant_distance_m"] > 1000  # within 20 km search radius
+    assert prop["industrial_match_source"] == "osm"
+
+
+def test_fire_inside_industrial_zone_fire_type_rule_industrial():
     feats = _run([FIRE_INSIDE])
-    assert feats[0]["properties"]["fire_type"] == "industrial"
+    assert feats[0]["properties"]["fire_type_rule"] == "industrial"
     assert feats[0]["properties"]["near_industrial"] is True
 
 
 def test_fire_in_forest_only_is_forest():
     feats = _run([FIRE_IN_FOREST], FOREST_FC)
     prop = feats[0]["properties"]
-    assert prop["fire_type"] == "forest"
+    assert prop["fire_type_rule"] == "forest"
     assert prop["near_industrial"] is False
     assert prop["near_vegetation"] is True
     assert prop["vegetation_distance_m"] <= 1000
@@ -145,7 +216,7 @@ def test_fire_in_forest_only_is_forest():
 def test_fire_near_everything_stays_industrial():
     feats = _run([FIRE_IN_BOTH], FOREST_FC)
     prop = feats[0]["properties"]
-    assert prop["fire_type"] == "industrial"
+    assert prop["fire_type_rule"] == "industrial"
     assert prop["near_industrial"] is True
     assert prop["near_vegetation"] is True
 
@@ -153,6 +224,6 @@ def test_fire_near_everything_stays_industrial():
 def test_fire_far_from_all_is_other_natural():
     feats = _run([FIRE_FAR_AWAY], FOREST_FC)
     prop = feats[0]["properties"]
-    assert prop["fire_type"] == "other_natural"
+    assert prop["fire_type_rule"] == "other_natural"
     assert prop["near_industrial"] is False
     assert prop["near_vegetation"] is False

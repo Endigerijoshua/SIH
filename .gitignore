@@ -26,3 +26,13 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Generated artifacts (trained model is built by scripts/train_classifier.py)
+models/
+
+# OSM Overpass fetch caches (rebuilt by app/services/osm.py, 24h TTL)
+industrial_zones_cache.json
+vegetation_zones_cache.json
+
+# WRI power-plant download cache (rebuilt by app/services/powerplants.py)
+power_plants_cache.json

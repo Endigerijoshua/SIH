@@ -21,7 +21,10 @@ logger = logging.getLogger(__name__)
 
 
 def occurrence_count(
-    lat: float, lon: float, radius_m: int | None = None, lookback_days: int | None = None
+    lat: float,
+    lon: float,
+    radius_m: int | None = None,
+    lookback_days: int | None = None,
 ) -> int:
     """Number of distinct past days with a detection within `radius_m` of a point."""
     radius_m = radius_m or settings.persistence_radius_m

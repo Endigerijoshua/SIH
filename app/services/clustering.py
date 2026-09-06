@@ -101,9 +101,7 @@ def cluster_persistent_fires(
                     "max_occurrence_count": max(
                         m["properties"].get("occurrence_count") or 0 for m in members
                     ),
-                    "near_industrial_zone": (
-                        zone_info["name"] if zone_info else None
-                    ),
+                    "near_industrial_zone": (zone_info["name"] if zone_info else None),
                     "distance_m": zone_info["distance_m"] if zone_info else None,
                     "member_fire_ids": [m.get("id") for m in members],
                 },

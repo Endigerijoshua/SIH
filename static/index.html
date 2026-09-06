@@ -67,6 +67,17 @@
     .entry dl { margin: 6px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; }
     .entry dt { color: #888; font-weight: 600; }
     .entry dd { margin: 0; }
+    .verdict { font-size: 16px; font-weight: 700; line-height: 1.2; }
+    .verdict .icon { margin-right: 6px; }
+    .detail { margin: 3px 0 0; color: #333; font-weight: 600; }
+    .persist { margin: 4px 0 0; color: #b91c1c; font-weight: 600; }
+    .reason { margin: 4px 0 0; font-size: 11px; color: #8792a8; font-style: italic; }
+    details { margin-top: 6px; }
+    details > summary { cursor: pointer; font-size: 11px; font-weight: 600; color: #1f6feb; }
+    details[open] > summary { margin-bottom: 4px; }
+    .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 11px; color: #555; }
+    .kv b { color: #888; font-weight: 600; }
+    .leaflet-popup .fb { min-width: 220px; }
     .empty {
       padding: 20px 16px; color: #666; font-size: 13px; text-align: center;
     }
@@ -78,7 +89,7 @@
   <aside id="sidebar">
     <header>
       <h1>SIH26162 · Industrial Fire Monitor</h1>
-      <p>Live NASA FIRMS hotspots × OSM industrial zones</p>
+      <p>Live NASA FIRMS hotspots × OSM industrial zones + WRI power plants (toggle satellite view on the map)</p>
     </header>
     <div id="controls">
       <div id="view-toggle" role="group" aria-label="Sidebar view">
@@ -93,7 +104,8 @@
         <span><span class="swatch" style="background:#ffd700"></span>Low conf.</span>
         <span><span class="ring"></span>Persistent source</span>
         <span><span class="swatch" style="background:#7a2ea0"></span>Thermal site</span>
-        <span><span class="swatch" style="background:#3388ff;opacity:.45"></span>Industrial zone</span>
+        <span><span class="swatch" style="background:#3388ff;opacity:.45"></span>Industrial zone (OSM)</span>
+        <span><span class="swatch" style="background:#6a5acd"></span>Power plant (WRI)</span>
       </div>
     </div>
     <div id="list"><div class="empty">Loading fire detections…</div></div>
