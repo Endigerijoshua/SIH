@@ -182,11 +182,12 @@ def nearest_zone_info(
     the clustering service to name recurring-fire "sites" after the industrial
     zone they sit next to.
     """
-    features = industrial_fc["features"]
+    features = industrial_fc.get("features", [])
     if not features:
         return None
-    polygons = [shape(feature["geometry"]) for feature in features]
-    tree = STRtree(polygons)
+    polygons, tree = _get_spatial_index(industrial_fc)
+    if not polygons or tree is None:
+        return None
     candidates_index = tree.query_nearest(
         point, max_distance=_SEARCH_PAD_DEGREES, all_matches=False
     )

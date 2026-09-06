@@ -40,6 +40,7 @@ from .services import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 app = FastAPI(
     title="SIH26162 Industrial Fire Detection",
     description="Live industrial fire + persistent thermal source detection using NASA FIRMS and OSM.",

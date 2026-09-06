@@ -126,24 +126,22 @@ def build_query(
     return OVERPASS_QUERY.format(timeout=timeout, queries=union)
 
 
-def _way_to_polygon(element: dict) -> Polygon | None:
+def _way_to_geometry(element: dict) -> dict | None:
     points = element.get("geometry")
     if not isinstance(points, list) or len(points) < 4:
         return None
-    coords = [(float(p["lon"]), float(p["lat"])) for p in points]
+    coords = [[float(p["lon"]), float(p["lat"])] for p in points]
     if coords[0] != coords[-1]:
         coords.append(coords[0])
-    polygon = Polygon(coords)
-    if polygon.is_valid and not polygon.is_empty:
-        return polygon
-    return None
+    if len(coords) < 4:
+        return None
+    return {"type": "Polygon", "coordinates": [coords]}
 
 
 def osm_elements_to_featurecollection(elements: list[dict]) -> dict:
     """Convert Overpass `way` elements into a GeoJSON polygon FeatureCollection.
 
-    Only ways with a valid, non-empty polygon geometry are kept; every other
-    element type (nodes, relations, degenerate ways) is dropped and logged.
+    Only ways with a valid closed polygon coordinate ring are kept.
     """
     features = []
     seen_ids = set()
@@ -153,9 +151,8 @@ def osm_elements_to_featurecollection(elements: list[dict]) -> dict:
         osm_id = element.get("id")
         if osm_id is None or osm_id in seen_ids:
             continue
-        polygon = _way_to_polygon(element)
-        if polygon is None:
-            logger.debug("skipping way %s: no valid polygon", osm_id)
+        geom = _way_to_geometry(element)
+        if geom is None:
             continue
         seen_ids.add(osm_id)
         tags = element.get("tags", {})
@@ -163,7 +160,7 @@ def osm_elements_to_featurecollection(elements: list[dict]) -> dict:
             {
                 "type": "Feature",
                 "id": f"osm-way-{osm_id}",
-                "geometry": polygon.__geo_interface__,
+                "geometry": geom,
                 "properties": {
                     "osm_type": "way",
                     "osm_id": osm_id,

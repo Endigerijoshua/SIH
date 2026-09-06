@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     industrial_cache_file: str = "industrial_zones_cache.json"
     vegetation_cache_file: str = "vegetation_zones_cache.json"
     mining_cache_file: str = "mining_zones_cache.json"
-    industrial_cache_max_age_hours: int = 24
+    industrial_cache_max_age_hours: int = 720
     power_plants_cache_file: str = "power_plants_cache.json"
     power_plants_cache_max_age_hours: int = 720
     flares_cache_file: str = "flares_cache.json"
