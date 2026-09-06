@@ -45,18 +45,18 @@ const CATEGORY_TITLES = {
 
 /* Category accent colors for the map markers (mirror of the CSS palette). */
 const CATEGORY_COLORS = {
-  persistent: "#fbbf24",
-  flare: "#f97316",
-  industrial: "#60a5fa",
-  mining: "#ca8a04",
-  forest: "#34d399",
-  other_natural: "#8b93a3",
+  persistent: "#b4532a",
+  flare: "#94a3b8",
+  industrial: "#475569",
+  mining: "#64748b",
+  forest: "#64748b",
+  other_natural: "#94a3b8",
 };
 
-const SITE_COLOR = "#c084fc";
-const POWER_PLANT_COLOR = "#818cf8";
-const FLARE_COLOR = "#f97316";
-const MINING_COLOR = "#a16207";
+const SITE_COLOR = "#64748b";
+const POWER_PLANT_COLOR = "#64748b";
+const FLARE_COLOR = "#94a3b8";
+const MINING_COLOR = "#475569";
 
 // GIBS WAITS ~1 day to publish true-color; use yesterday so tiles always exist.
 const GIBS_DATE = new Date(Date.now() - 24 * 3600 * 1000)
@@ -88,9 +88,9 @@ const gibsVIIRS = L.tileLayer(
 
 const zoneLayer = L.geoJSON(null, {
   style: {
-    color: "#22d3ee",
+    color: "#64748b",
     weight: 1,
-    fillColor: "#22d3ee",
+    fillColor: "#64748b",
     fillOpacity: 0.15,
   },
   onEachFeature: (feature, layer) => {
@@ -109,7 +109,7 @@ const powerPlantLayer = L.geoJSON(null, {
   pointToLayer: (feature, latlng) =>
     L.circleMarker(latlng, {
       radius: 4,
-      color: "#1a1433",
+      color: "#334155",
       weight: 1,
       fillColor: POWER_PLANT_COLOR,
       fillOpacity: 0.8,
@@ -130,7 +130,7 @@ const flareLayer = L.geoJSON(null, {
   pointToLayer: (feature, latlng) =>
     L.circleMarker(latlng, {
       radius: 3,
-      color: "#4a1105",
+      color: "#334155",
       weight: 1,
       fillColor: FLARE_COLOR,
       fillOpacity: 0.7,
@@ -343,7 +343,7 @@ function renderSiteMarkers(sitesFC) {
     const [lon, lat] = feature.geometry.coordinates;
     L.circleMarker([lat, lon], {
       radius: 12,
-      color: "#3c1053",
+      color: "#334155",
       weight: 2,
       fillColor: SITE_COLOR,
       fillOpacity: 0.8,
