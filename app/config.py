@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     firms_dataset: str = "VIIRS_SNPP_NRT"
     firms_bbox: str = "68,6,97,37"
     firms_days: int = 3
-    india_boundary_buffer_deg: float = 0.03
+    india_boundary_buffer_deg: float = 0.0
     buffer_meters: int = 1000
     fire_history_db: str = "fire_history.db"
     persistence_radius_m: int = 300

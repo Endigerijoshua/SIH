@@ -68,9 +68,11 @@ sources**, rank by severity, and render everything on a live map dashboard
   and island territories). `filter_to_india_boundary()` runs inside
   `fetch_fires()`, so it applies to ALL live endpoints (`/api/fires`,
   `/api/flagged-fires`, `/api/thermal-sites`) AND the training-script backfill —
-  one choke point, no bbox-only leaks. A tiny outward buffer
-  (`india_boundary_buffer_deg`, default 0.03 ≈ 3 km) absorbs FIRMS ~375 m point
-  geolocation error so genuine border fires are not dropped.
+  one choke point, no bbox-only leaks. `india_boundary_buffer_deg` defaults to
+  **0.0 (strict polygon)** — demo integrity requires ZERO out-of-boundary
+  detections; only raise it if FIRMS ~375 m point error genuinely drops
+  desired border fires (2026-09-06: 0 out-of-boundary in a live 1,258-fire
+  window at 0.0).
 - Refresh: ~15 min. Rate limit: 5,000 req / 10 min — safe to poll live during demo.
 - CSV columns of interest: `latitude`, `longitude`, `confidence`
   (l/n/h = low/nominal/high), `bright_ti4` (brightness), `frp` (Fire Radiative Power;
@@ -349,11 +351,14 @@ sih-fire-detection/
 - [x] India-only boundary filter on LIVE endpoints: `app/services/firms.py`
        `filter_to_india_boundary()` clips every `fetch_fires()` response to the real
        India polygon (`app/data/india_boundary.geojson`, Natural Earth 10m admin-0
-       incl. Andaman & Nicobar; 110m rejected — drops NE states + islands) with a
-       ~3 km outward buffer (`india_boundary_buffer_deg`) for FIRMS point accuracy.
-       Applies to `/api/fires`, `/api/flagged-fires`, `/api/thermal-sites` AND the
-       training backfill (single choke point inside `fetch_fires`), so no neighbor
-       (PK/CN/NP/BT/BD/MM/LK) detections leak. 67 tests, ruff clean.
+       incl. Andaman & Nicobar; 110m rejected — drops NE states + islands);
+       `india_boundary_buffer_deg` defaults to **0.0 (strict polygon)**. Applies to
+       `/api/fires`, `/api/flagged-fires`, `/api/thermal-sites` AND the training
+       backfill (single choke point inside `fetch_fires`), so no neighbor
+       (PK/CN/NP/BT/BD/MM/LK) detections leak. Verified live 2026-09-06: stale server
+       (pre-fix process) leaked 679/1258 fires outside India; after restart,
+       `/api/fires` + `/api/flagged-fires` returned 579 fires, 0 out-of-boundary.
+       67 tests, ruff clean.
 - [x] Frontend filter-tab → map fix + command-console redesign: each fire maps to
        exactly ONE category (`persistent → flare → industrial → mining → forest →
        other_natural`) shared by the sidebar AND a dedicated Leaflet layer group per
