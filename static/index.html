@@ -37,12 +37,22 @@
     #view-toggle { margin-bottom: 8px; display: flex; gap: 6px; }
     #view-toggle button {
       background: #e5e9f0; color: #333; border: 0; border-radius: 4px;
-      padding: 6px 12px; cursor: pointer; font-size: 12px;
+      padding: 6px 12px; cursor: pointer; font-size: 12px; font-weight: 500;
     }
     #view-toggle button.active { background: #1f2d3d; color: #fff; }
-    #summary { margin-top: 8px; font-size: 12px; color: #444; }
+    #category-filters {
+      margin: 8px 0; display: flex; flex-wrap: wrap; gap: 4px;
+    }
+    .filter-tab {
+      background: #f0f2f5; color: #444; border: 1px solid #d0d7de; border-radius: 12px;
+      padding: 3px 8px; cursor: pointer; font-size: 11px; font-weight: 500;
+      transition: all 0.15s ease;
+    }
+    .filter-tab:hover { background: #e2e5ea; }
+    .filter-tab.active { background: #1f2d3d; color: #fff; border-color: #1f2d3d; }
+    #summary { margin-top: 8px; font-size: 12px; color: #444; line-height: 1.4; }
     #legend {
-      margin-top: 8px; font-size: 11px; color: #555; display: flex; gap: 12px;
+      margin-top: 8px; font-size: 11px; color: #555; display: flex; flex-wrap: wrap; gap: 8px 12px;
     }
     #legend .swatch {
       display: inline-block; width: 10px; height: 10px; border-radius: 50%;
@@ -62,12 +72,16 @@
       cursor: pointer; font-size: 12px;
     }
     .entry:hover { box-shadow: 0 1px 4px rgba(0,0,0,0.15); }
+    .entry.entry-industrial { border-left-color: #1f2d3d; }
+    .entry.entry-forest { border-left-color: #2e7d32; }
+    .entry.entry-other_natural { border-left-color: #e65100; }
+    .entry.entry-persistent { border-left-color: #b91c1c; }
     .entry .head { display: flex; justify-content: space-between; font-weight: 600; }
     .entry .dist { color: #1f6feb; }
     .entry dl { margin: 6px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; }
     .entry dt { color: #888; font-weight: 600; }
     .entry dd { margin: 0; }
-    .verdict { font-size: 16px; font-weight: 700; line-height: 1.2; }
+    .verdict { font-size: 15px; font-weight: 700; line-height: 1.2; }
     .verdict .icon { margin-right: 6px; }
     .detail { margin: 3px 0 0; color: #333; font-weight: 600; }
     .persist { margin: 4px 0 0; color: #b91c1c; font-weight: 600; }
@@ -95,6 +109,13 @@
       <div id="view-toggle" role="group" aria-label="Sidebar view">
         <button id="view-detections" class="active">Detections</button>
         <button id="view-sites">Clustered sites</button>
+      </div>
+      <div id="category-filters" role="group" aria-label="Fire category filter">
+        <button class="filter-tab active" data-category="all">All (<span id="count-all">0</span>)</button>
+        <button class="filter-tab" data-category="industrial">🏭 Industrial (<span id="count-ind">0</span>)</button>
+        <button class="filter-tab" data-category="forest">🌲 Forest (<span id="count-forest">0</span>)</button>
+        <button class="filter-tab" data-category="other_natural">🌾 Agri/Natural (<span id="count-nat">0</span>)</button>
+        <button class="filter-tab" data-category="persistent">🔴 Persistent (<span id="count-persist">0</span>)</button>
       </div>
       <button id="reload">Refresh data</button>
       <div id="summary">Loading…</div>
