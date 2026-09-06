@@ -105,11 +105,62 @@ FIRE_SOLO_NEAR_PLANT = {
     "properties": {},
 }
 
+# A mining polygon (landuse=quarry) far from the plant (~45 km east of the
+# industrial/forest cluster) with a fire inside it.
+MINING_POLY = {
+    "type": "Feature",
+    "id": "osm-way-m1",
+    "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [73.00, 22.40],
+                [73.10, 22.40],
+                [73.10, 22.50],
+                [73.00, 22.50],
+                [73.00, 22.40],
+            ]
+        ],
+    },
+    "properties": {"landuse": "quarry", "name": "Test Quarry"},
+}
+FIRE_NEAR_MINING = {
+    "type": "Feature",
+    "id": 7,
+    "geometry": {"type": "Point", "coordinates": [73.05, 22.45]},
+    "properties": {},
+}
+MINING_FC = {"type": "FeatureCollection", "features": [MINING_POLY]}
 
-def _run(fires, vegetation_fc=None, power_plants_fc=None):
+# A mining polygon overlapping the plant + forest cluster to test priority.
+MINING_POLY_OVERLAP = {
+    "type": "Feature",
+    "id": "osm-way-m2",
+    "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [72.45, 22.35],
+                [72.75, 22.35],
+                [72.75, 22.55],
+                [72.45, 22.55],
+                [72.45, 22.35],
+            ]
+        ],
+    },
+    "properties": {"landuse": "quarry", "name": "Overlap Quarry"},
+}
+MINING_OVERLAP_FC = {"type": "FeatureCollection", "features": [MINING_POLY_OVERLAP]}
+
+
+def _run(
+    fires, vegetation_fc=None, power_plants_fc=None, flares_fc=None, mining_fc=None
+):
     fc = {"type": "FeatureCollection", "features": fires}
     zones = {"type": "FeatureCollection", "features": [PLANT_POLY]}
-    return spatial.annotate_fires(fc, zones, vegetation_fc, power_plants_fc)["features"]
+    return spatial.annotate_fires(
+        fc, zones, vegetation_fc, power_plants_fc, flares_fc, mining_fc
+    )["features"]
 
 
 def test_fire_inside_zone_flagged():
@@ -158,6 +209,9 @@ def test_all_features_have_annotation_fields():
         assert "near_power_plant" in feat["properties"]
         assert "power_plant_distance_m" in feat["properties"]
         assert "industrial_match_source" in feat["properties"]
+        assert "near_mining" in feat["properties"]
+        assert "distance_to_mining" in feat["properties"]
+        assert "mining_site_name" in feat["properties"]
     assert sum(f["properties"]["near_industrial"] for f in feats) == 2
 
 
@@ -227,3 +281,107 @@ def test_fire_far_from_all_is_other_natural():
     assert prop["fire_type_rule"] == "other_natural"
     assert prop["near_industrial"] is False
     assert prop["near_vegetation"] is False
+
+
+# Known gas-flare site (VNF catalog) ~550 m north of the industrial polygon.
+FLARE_SITE = {
+    "type": "Feature",
+    "id": "vnf-flare-1",
+    "geometry": {"type": "Point", "coordinates": [72.55, 22.455]},
+    "properties": {
+        "name": "IND_X_2024_72.55E_22.455N_v0.2",
+        "source": "viirs_nightfire",
+    },
+}
+FLARE_FAR = {
+    "type": "Feature",
+    "id": "vnf-flare-2",
+    "geometry": {"type": "Point", "coordinates": [74.1, 15.1]},
+    "properties": {"name": "FAR_FLARE_15KM", "source": "viirs_nightfire"},
+}
+
+
+def test_industrial_fire_near_flare_site_gets_gas_flare_sub_label():
+    flares_fc = {"type": "FeatureCollection", "features": [FLARE_SITE]}
+    feats = _run([FIRE_INSIDE], flares_fc=flares_fc)
+    prop = feats[0]["properties"]
+    assert prop["fire_type_rule"] == "industrial"
+    assert prop["gas_flare"] is True
+    assert 0 <= prop["distance_to_flare"] <= 2000
+    assert prop["flare_site_name"] == FLARE_SITE["properties"]["name"]
+
+
+def test_industrial_fire_far_from_flare_not_gas_flare():
+    flares_fc = {"type": "FeatureCollection", "features": [FLARE_FAR]}
+    feats = _run(
+        [FIRE_SOLO_NEAR_PLANT],
+        power_plants_fc={"type": "FeatureCollection", "features": [POWER_PLANT_SOLO]},
+        flares_fc=flares_fc,
+    )
+    prop = feats[0]["properties"]
+    assert prop["fire_type_rule"] == "industrial"
+    assert prop["gas_flare"] is False
+    assert prop["distance_to_flare"] is not None  # measured but beyond 2 km
+
+
+def test_non_industrial_fire_not_gas_flare():
+    flares_fc = {"type": "FeatureCollection", "features": [FLARE_SITE]}
+    feats = _run([FIRE_IN_FOREST], FOREST_FC, flares_fc=flares_fc)
+    prop = feats[0]["properties"]
+    assert prop["fire_type_rule"] == "forest"
+    assert prop["gas_flare"] is False
+    assert "distance_to_flare" in prop
+
+
+def test_all_features_have_gas_flare_fields():
+    feats = _run([FIRE_INSIDE, FIRE_FAR_AWAY])
+    for feat in feats:
+        props = feat["properties"]
+        assert "gas_flare" in props
+        assert "distance_to_flare" in props
+        assert "flare_site_name" in props
+
+
+# A fire in the forest AND the overlap quarry but outside the plant polygon.
+FIRE_IN_FOREST_AND_MINING = {
+    "type": "Feature",
+    "id": 8,
+    "geometry": {"type": "Point", "coordinates": [72.70, 22.45]},
+    "properties": {},
+}
+
+
+def test_fire_near_mining_only_is_mining():
+    feats = _run([FIRE_NEAR_MINING], mining_fc=MINING_FC)
+    prop = feats[0]["properties"]
+    assert prop["fire_type_rule"] == "mining"
+    assert prop["near_industrial"] is False
+    assert prop["near_mining"] is True
+    assert prop["distance_to_mining"] <= 1000
+    assert prop["mining_site_name"] == "Test Quarry"
+    assert prop["mining_zone_type"] == "quarry"
+
+
+def test_fire_far_from_mining_not_mining():
+    feats = _run([FIRE_FAR_AWAY], mining_fc=MINING_FC)
+    prop = feats[0]["properties"]
+    assert prop["fire_type_rule"] == "other_natural"
+    assert prop["near_mining"] is False
+    assert prop["distance_to_mining"] is None
+
+
+def test_fire_near_mining_and_industrial_stays_industrial():
+    feats = _run([FIRE_IN_BOTH], FOREST_FC, mining_fc=MINING_OVERLAP_FC)
+    prop = feats[0]["properties"]
+    assert prop["fire_type_rule"] == "industrial"
+    assert prop["near_industrial"] is True
+    assert (
+        prop["near_mining"] is True
+    )  # recorded as proximity even when industrial wins
+
+
+def test_fire_near_mining_and_forest_is_mining():
+    feats = _run([FIRE_IN_FOREST_AND_MINING], FOREST_FC, mining_fc=MINING_OVERLAP_FC)
+    prop = feats[0]["properties"]
+    assert prop["fire_type_rule"] == "mining"  # mining beats forest when not industrial
+    assert prop["near_vegetation"] is True  # still records the vegetation proximity

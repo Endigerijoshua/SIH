@@ -7,6 +7,8 @@ const FIRES_URL = "/api/flagged-fires";
 const ZONES_URL = "/api/industrial-zones";
 const SITES_URL = "/api/thermal-sites";
 const POWER_PLANTS_URL = "/api/power-plants";
+const FLARES_URL = "/api/flares";
+const MINING_URL = "/api/mining-zones";
 
 const CONFIDENCE_COLORS = {
   h: "#d7191c",
@@ -17,6 +19,8 @@ const CONFIDENCE_LABELS = { h: "high", n: "nominal", l: "low" };
 
 const SITE_COLOR = "#7a2ea0";
 const POWER_PLANT_COLOR = "#6a5acd";
+const FLARE_COLOR = "#e65100";
+const MINING_COLOR = "#4e342e";
 
 // GIBS WAITS ~1 day to publish true-color; use yesterday so tiles always exist.
 const GIBS_DATE = new Date(Date.now() - 24 * 3600 * 1000)
@@ -86,6 +90,46 @@ const powerPlantLayer = L.geoJSON(null, {
   },
 }).addTo(map);
 
+const flareLayer = L.geoJSON(null, {
+  pointToLayer: (feature, latlng) =>
+    L.circleMarker(latlng, {
+      radius: 3,
+      color: "#4a1105",
+      weight: 1,
+      fillColor: FLARE_COLOR,
+      fillOpacity: 0.7,
+    }),
+  onEachFeature: (feature, layer) => {
+    const props = feature.properties || {};
+    const rows = [
+      ["Flare site", props.name || "—"],
+      ["Country", props.country || "—"],
+      ["Catalog year", props.year != null ? props.year : "—"],
+      ["Source", props.source || "—"],
+    ];
+    layer.bindPopup(rows.map(([k, v]) => `<b>${k}:</b> ${v}`).join("<br>"));
+  },
+}).addTo(map);
+
+const miningLayer = L.geoJSON(null, {
+  style: {
+    color: MINING_COLOR,
+    weight: 1,
+    fillColor: MINING_COLOR,
+    fillOpacity: 0.18,
+    dashArray: "3 3",
+  },
+  onEachFeature: (featureMap, layer) => {
+    const props = featureMap.properties || {};
+    const rows = [
+      ["Name", props.name || "—"],
+      ["Type", props.landuse === "quarry" ? "quarry" : props.man_made === "mineshaft" ? "mine shaft" : "mining"],
+      ["OSM id", props.osm_id],
+    ];
+    layer.bindPopup(rows.map(([k, v]) => `<b>${k}:</b> ${v}`).join("<br>"));
+  },
+}).addTo(map);
+
 L.control
   .layers(
     {
@@ -96,6 +140,8 @@ L.control
     {
       "Industrial zones (OSM)": zoneLayer,
       "Power plants (WRI)": powerPlantLayer,
+      "Gas-flare sites (VIIRS Nightfire)": flareLayer,
+      "Mining zones (OSM)": miningLayer,
     },
     { collapsed: false, position: "topright" },
   )
@@ -113,7 +159,7 @@ const summaryEl = document.getElementById("summary");
 const detectionsBtn = document.getElementById("view-detections");
 const sitesBtn = document.getElementById("view-sites");
 
-const cache = { firesFC: null, zonesFC: null, sitesFC: null, powerFC: null };
+const cache = { firesFC: null, zonesFC: null, sitesFC: null, powerFC: null, flaresFC: null, miningFC: null };
 let currentView = "detections";
 
 function confidenceColor(confidence) {
@@ -150,6 +196,14 @@ function fireKvHtml(props) {
   if (props.near_power_plant) {
     rows.push(["Power plant", props.power_plant_name || "—"]);
     rows.push(["Plant distance", formatDistance(props.power_plant_distance_m)]);
+  }
+  if (props.fire_type_rule === "mining" || props.near_mining) {
+    rows.push(["Mining zone", props.mining_site_name || "—"]);
+    rows.push(["Mining distance", formatDistance(props.distance_to_mining)]);
+  }
+  if (props.gas_flare) {
+    rows.push(["Gas flare (VNF)", props.flare_site_name || "yes"]);
+    rows.push(["Flare distance", formatDistance(props.distance_to_flare)]);
   }
   if (props.fire_type_ml) rows.push(["ML type", props.fire_type_ml]);
   if (props.fire_type_ml_confidence != null) {
@@ -206,8 +260,14 @@ function markerStyle(props) {
   if (isPersistent) {
     color = "#b91c1c";
     weight = 2;
+  } else if (props.gas_flare) {
+    color = FLARE_COLOR;
+    weight = 2;
   } else if (fireType === "industrial" || props.near_industrial) {
     color = "#1f2d3d";
+    weight = 2;
+  } else if (fireType === "mining" || props.near_mining) {
+    color = MINING_COLOR;
     weight = 2;
   } else if (fireType === "forest") {
     color = "#2e7d32";
@@ -264,6 +324,16 @@ function renderZones(featureCollection) {
 function renderPowerPlants(featureCollection) {
   powerPlantLayer.clearLayers();
   powerPlantLayer.addData(featureCollection);
+}
+
+function renderFlareSites(featureCollection) {
+  flareLayer.clearLayers();
+  flareLayer.addData(featureCollection);
+}
+
+function renderMiningZones(featureCollection) {
+  miningLayer.clearLayers();
+  miningLayer.addData(featureCollection);
 }
 
 function sectionTitle(label) {
@@ -335,6 +405,7 @@ function buildSiteEntry(feature) {
 function renderDetectionsSidebar(features) {
   const persistent = [];
   const industrial = [];
+  const mining = [];
   const forest = [];
   const other_natural = [];
 
@@ -346,6 +417,8 @@ function renderDetectionsSidebar(features) {
     const fireType = p.fire_type_rule || "other_natural";
     if (fireType === "industrial" || p.near_industrial) {
       industrial.push(f);
+    } else if (fireType === "mining" || p.near_mining) {
+      mining.push(f);
     } else if (fireType === "forest") {
       forest.push(f);
     } else {
@@ -359,18 +432,21 @@ function renderDetectionsSidebar(features) {
       (a.properties.distance_m || 99999) - (b.properties.distance_m || 99999),
   );
   industrial.sort((a, b) => (a.properties.distance_m || 99999) - (b.properties.distance_m || 99999));
+  mining.sort((a, b) => (a.properties.distance_to_mining || 99999) - (b.properties.distance_to_mining || 99999));
   forest.sort((a, b) => (a.properties.vegetation_distance_m || 99999) - (b.properties.vegetation_distance_m || 99999));
   other_natural.sort((a, b) => (b.properties.frp || 0) - (a.properties.frp || 0));
 
   // Update filter badge counts
   const countAllEl = document.getElementById("count-all");
   const countIndEl = document.getElementById("count-ind");
+  const countMiningEl = document.getElementById("count-mining");
   const countForestEl = document.getElementById("count-forest");
   const countNatEl = document.getElementById("count-nat");
   const countPersistEl = document.getElementById("count-persist");
 
   if (countAllEl) countAllEl.textContent = features.length;
   if (countIndEl) countIndEl.textContent = industrial.length;
+  if (countMiningEl) countMiningEl.textContent = mining.length;
   if (countForestEl) countForestEl.textContent = forest.length;
   if (countNatEl) countNatEl.textContent = other_natural.length;
   if (countPersistEl) countPersistEl.textContent = persistent.length;
@@ -388,6 +464,8 @@ function renderDetectionsSidebar(features) {
     renderSection("Persistent Thermal Sources", persistent);
   } else if (currentCategoryFilter === "industrial") {
     renderSection("Industrial Fires & Power Plants", industrial);
+  } else if (currentCategoryFilter === "mining") {
+    renderSection("Mining & Quarry Fires", mining);
   } else if (currentCategoryFilter === "forest") {
     renderSection("Forest & Vegetation Fires", forest);
   } else if (currentCategoryFilter === "other_natural") {
@@ -396,6 +474,7 @@ function renderDetectionsSidebar(features) {
     // "all" tab
     renderSection("Persistent Thermal Sources", persistent);
     renderSection("Industrial Fires & Power Plants", industrial);
+    renderSection("Mining & Quarry Fires", mining);
     renderSection("Forest & Vegetation Fires", forest);
     renderSection("Crop / Agricultural Burning & Natural Hotspots", other_natural);
   }
@@ -411,6 +490,7 @@ function renderDetectionsSidebar(features) {
     total: features.length,
     persistent: persistent.length,
     industrial: industrial.length,
+    mining: mining.length,
     forest: forest.length,
     natural: other_natural.length,
   };
@@ -461,20 +541,26 @@ async function loadDetections(force = false) {
   summaryEl.textContent = "Fetching live data…";
   try {
     if (force || !cache.firesFC) {
-      [cache.firesFC, cache.zonesFC, cache.powerFC] = await Promise.all([
-        fetchJson(FIRES_URL),
-        fetchJson(ZONES_URL),
-        fetchJson(POWER_PLANTS_URL),
-      ]);
+      [cache.firesFC, cache.zonesFC, cache.powerFC, cache.flaresFC, cache.miningFC] =
+        await Promise.all([
+          fetchJson(FIRES_URL),
+          fetchJson(ZONES_URL),
+          fetchJson(POWER_PLANTS_URL),
+          fetchJson(FLARES_URL),
+          fetchJson(MINING_URL),
+        ]);
     }
     const features = cache.firesFC.features || [];
     renderFireMarkers(features);
     renderZones(cache.zonesFC);
     renderPowerPlants(cache.powerFC);
+    renderFlareSites(cache.flaresFC);
+    renderMiningZones(cache.miningFC);
     const counts = renderDetectionsSidebar(features);
     summaryEl.textContent =
       `${counts.total} live hotspots · ` +
       `${counts.industrial} 🏭 industrial · ` +
+      `${counts.mining} ⛏ mining · ` +
       `${counts.forest} 🌲 forest · ` +
       `${counts.natural} 🌾 agri/natural · ` +
       `${counts.persistent} 🔴 persistent`;

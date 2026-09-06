@@ -28,6 +28,7 @@ from .config import settings
 from .services import (
     clustering,
     firms,
+    flares,
     ml,
     osm,
     persistence,
@@ -113,11 +114,30 @@ async def get_vegetation_zones() -> dict:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+@app.get("/api/mining-zones")
+async def get_mining_zones() -> dict:
+    """Fetch or serve cached OSM mining polygons (quarries + mine shafts) as GeoJSON."""
+    try:
+        return await osm.get_mining_zones()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @app.get("/api/power-plants")
 async def get_power_plants() -> dict:
     """India power plants (WRI Global Power Plant Database) as point GeoJSON."""
     try:
         return await powerplants.get_power_plants()
+    except (RuntimeError, httpx.HTTPError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/api/flares")
+async def get_flares() -> dict:
+    """Known gas-flare sites from NASA VIIRS Nightfire (annual catalog) as
+    point GeoJSON — supporting evidence for the `gas_flare` sub-label."""
+    try:
+        return await flares.get_flares()
     except (RuntimeError, httpx.HTTPError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -131,12 +151,20 @@ async def get_flagged_fires(days: int | None = None) -> dict:
         logger.info(
             "[flagged-fires] %d fires fetched", len(fires_fc.get("features", []))
         )
-        industrial_fc, vegetation_fc, power_plants_fc = await _reference_layers()
+        (
+            industrial_fc,
+            vegetation_fc,
+            power_plants_fc,
+            flares_fc,
+            mining_fc,
+        ) = await _reference_layers()
         logger.info(
-            "[flagged-fires] reference layers loaded: %d industrial, %d vegetation, %d power plants",
+            "[flagged-fires] reference layers loaded: %d industrial, %d vegetation, %d power plants, %d flares, %d mining",
             len(industrial_fc.get("features", [])),
             len(vegetation_fc.get("features", [])),
             len(power_plants_fc.get("features", [])),
+            len(flares_fc.get("features", [])),
+            len(mining_fc.get("features", [])),
         )
         logger.info("[flagged-fires] START spatial.annotate_fires")
         spatial.annotate_fires(
@@ -144,6 +172,8 @@ async def get_flagged_fires(days: int | None = None) -> dict:
             industrial_fc,
             vegetation_fc,
             power_plants_fc,
+            flares_fc,
+            mining_fc,
             cache_version=_reference_cache_version(),
         )
         logger.info("[flagged-fires] END spatial.annotate_fires")
@@ -168,21 +198,31 @@ async def get_flagged_fires(days: int | None = None) -> dict:
         ) from exc
 
 
-async def _reference_layers() -> tuple[dict, dict, dict]:
-    """Fetch industrial + vegetation zones and power plants in parallel."""
+async def _reference_layers() -> tuple[dict, dict, dict, dict, dict]:
+    """Fetch industrial + vegetation + mining zones, power plants and flare sites."""
     logger.info("_reference_layers: START fetch")
-    industrial_fc, vegetation_fc, power_plants_fc = await asyncio.gather(
+    (
+        industrial_fc,
+        vegetation_fc,
+        power_plants_fc,
+        flares_fc,
+        mining_fc,
+    ) = await asyncio.gather(
         osm.get_industrial_zones(),
         osm.get_vegetation_zones(),
         powerplants.get_power_plants(),
+        flares.get_flares(),
+        osm.get_mining_zones(),
     )
     logger.info(
-        "_reference_layers: END fetch (%d industrial, %d vegetation, %d power plants)",
+        "_reference_layers: END fetch (%d industrial, %d vegetation, %d power plants, %d flares, %d mining)",
         len(industrial_fc.get("features", [])),
         len(vegetation_fc.get("features", [])),
         len(power_plants_fc.get("features", [])),
+        len(flares_fc.get("features", [])),
+        len(mining_fc.get("features", [])),
     )
-    return industrial_fc, vegetation_fc, power_plants_fc
+    return industrial_fc, vegetation_fc, power_plants_fc, flares_fc, mining_fc
 
 
 def _reference_cache_version() -> str:
@@ -198,6 +238,8 @@ def _reference_cache_version() -> str:
         "industrial_cache_file",
         "vegetation_cache_file",
         "power_plants_cache_file",
+        "flares_cache_file",
+        "mining_cache_file",
     ):
         path = Path(getattr(settings, name, name))
         try:
@@ -214,12 +256,20 @@ async def get_thermal_sites(days: int | None = None) -> dict:
     try:
         fires_fc = await firms.fetch_fires(days=days)
         db.record_featurecollection(fires_fc)
-        industrial_fc, vegetation_fc, power_plants_fc = await _reference_layers()
+        (
+            industrial_fc,
+            vegetation_fc,
+            power_plants_fc,
+            flares_fc,
+            mining_fc,
+        ) = await _reference_layers()
         spatial.annotate_fires(
             fires_fc,
             industrial_fc,
             vegetation_fc,
             power_plants_fc,
+            flares_fc,
+            mining_fc,
             cache_version=_reference_cache_version(),
         )
         persistence.annotate_persistence(fires_fc)

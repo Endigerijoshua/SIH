@@ -1,10 +1,11 @@
-"""OpenStreetMap zone fetch via the Overpass API (industrial + vegetation).
+"""OpenStreetMap zone fetch via the Overpass API (industrial + vegetation + mining).
 
-Queries industrial (`landuse=industrial`) and vegetation (`natural=wood`,
-`natural=scrub`, `landuse=forest`) polygons for a set of regional state bboxes
-(whole-India box is too slow / times out), converts the Overpass JSON response
-into GeoJSON FeatureCollections, and caches each layer to its own local file so
-Overpass is not hit on every request.
+Queries industrial (`landuse=industrial`), vegetation (`natural=wood`,
+`natural=scrub`, `landuse=forest`) and mining (`landuse=quarry`,
+`man_made=mineshaft`) polygons for a set of regional state bboxes (whole-India
+box is too slow / times out), converts the Overpass JSON response into GeoJSON
+FeatureCollections, and caches each layer to its own local file so Overpass is
+not hit on every request.
 
 The primary mirror at overpass-api.de consistently rejected requests with 406
 during development, so queries go straight to the kumi mirror. Queries stay to a
@@ -59,11 +60,16 @@ ZONE_QUERIES = {
         'way["natural"="scrub"]({south},{west},{north},{east});',
         'way["landuse"="forest"]({south},{west},{north},{east});',
     ),
+    "mining": (
+        'way["landuse"="quarry"]({south},{west},{north},{east});',
+        'way["man_made"="mineshaft"]({south},{west},{north},{east});',
+    ),
 }
 
 CACHE_FILE_SETTINGS = {
     "industrial": "industrial_cache_file",
     "vegetation": "vegetation_cache_file",
+    "mining": "mining_cache_file",
 }
 
 
@@ -391,3 +397,11 @@ async def get_vegetation_zones(
 ) -> dict:
     """Forest/vegetation polygons (wood, scrub, forest) as GeoJSON."""
     return await get_zones("vegetation", client, max_concurrency)
+
+
+async def get_mining_zones(
+    client: httpx.AsyncClient | None = None,
+    max_concurrency: int = 4,
+) -> dict:
+    """Mining polygons (quarries + mine shafts) as GeoJSON."""
+    return await get_zones("mining", client, max_concurrency)

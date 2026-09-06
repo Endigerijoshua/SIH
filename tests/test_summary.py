@@ -110,6 +110,24 @@ def test_other_natural_crop_burning():
     assert "most likely crop/agricultural burning" in prop["explanation"]
 
 
+def test_mining_fire_summary_and_explanation():
+    prop = _summarize(
+        _props(
+            fire_type_rule="mining",
+            near_mining=True,
+            distance_to_mining=820,
+            mining_site_name="Kothagudem",
+            mining_zone_type="mine",
+        )
+    )
+    assert prop["summary_headline"] == "Mining/Quarry Fire"
+    assert prop["summary_icon"] == "\u26cf\ufe0f"
+    assert "Kothagudem mine" in prop["summary"]
+    assert "\u2248820 m" in prop["summary"]
+    assert "within 1 km" in prop["explanation"]
+    assert "quarry/mine shaft" in prop["explanation"]
+
+
 def test_persistent_note_appended():
     prop = _summarize(
         _props(
@@ -125,6 +143,23 @@ def test_persistent_note_appended():
     assert "detected 4 times in the past 14 days" in prop["summary"]
     assert "ongoing industrial source" in prop["summary"]
     assert prop["summary_persistent"]
+
+
+def test_gas_flare_sub_label_mentioned():
+    prop = _summarize(
+        _props(
+            fire_type_rule="industrial",
+            near_industrial=True,
+            industrial_match_source="osm",
+            distance_m=340,
+            gas_flare=True,
+            distance_to_flare=620,
+            flare_site_name="IND_X_2024_72.5E_22.4N_v0.2",
+        )
+    )
+    assert "gas-flare site" in prop["summary"]
+    assert "VIIRS Nightfire" in prop["summary"]
+    assert "VIIRS Nightfire" in prop["explanation"]
 
 
 def test_all_summary_fields_present():

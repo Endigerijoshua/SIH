@@ -1,8 +1,8 @@
-"""Train a weak-label RandomForestClassifier for three-way fire classification.
+"""Train a weak-label RandomForestClassifier for four-way fire classification.
 
 Weak labels: for every historical fire in `fire_history`, the fire type is derived
 from our existing rule-based spatial join (spatial.annotate_fires), giving us
-"industrial" / "forest" / "other_natural" ground truth without any hand labelling.
+"industrial" / "mining" / "forest" / "other_natural" ground truth without any hand labelling.
 
 Model: out-of-the-box scikit-learn RandomForestClassifier (n_estimators=100)
 wrapped in CalibratedClassifierCV (isotonic, cv=5) so `predict_proba` outputs are
@@ -121,7 +121,7 @@ def report_class_balance(y: list[str]) -> None:
 
 
 def spatial_fire_classes_order() -> tuple[str, ...]:
-    return ("industrial", "forest", "other_natural")
+    return ("industrial", "mining", "forest", "other_natural")
 
 
 def compare_calibration(
@@ -186,7 +186,15 @@ def main() -> int:
     industrial_fc = asyncio.run(osm.get_industrial_zones())
     vegetation_fc = asyncio.run(osm.get_vegetation_zones())
     power_plants_fc = asyncio.run(powerplants.get_power_plants())
-    spatial.annotate_fires(fires_fc, industrial_fc, vegetation_fc, power_plants_fc)
+    mining_fc = asyncio.run(osm.get_mining_zones())
+    spatial.annotate_fires(
+        fires_fc,
+        industrial_fc,
+        vegetation_fc,
+        power_plants_fc,
+        flares_fc=None,
+        mining_fc=mining_fc,
+    )
     persistence.annotate_persistence(fires_fc)
 
     X, y = build_training_set(fires_fc)

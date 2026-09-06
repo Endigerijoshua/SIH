@@ -86,6 +86,9 @@ sources**, rank by severity, and render everything on a live map dashboard
 - Any fire within **1 km** of a plant is tagged industrial; `industrial_match_source`
   records whether proximity came from OSM (`osm`), the power-plant DB (`power_plant_db`),
   or both (`both`).
+- Mining polygons (`landuse=quarry`, `man_made=mineshaft`) are fetched via the same
+  tiled `osm.py` machinery into a `mining_zones_cache.json` (10,942 India zones) and
+  classify a fire as the `mining` rule class (see Architecture §1).
 
 ### 4) NASA GIBS satellite imagery (frontend base layer, render only)
 - Free WMTS, no key; used purely as a Leaflet base-layer toggle — NO raster
@@ -97,26 +100,51 @@ sources**, rank by severity, and render everything on a live map dashboard
   Layers: `MODIS_Terra_CorrectedReflectance_TrueColor`, `VIIRS_SNPP_CorrectedReflectance_TrueColor`
   (both verified 200 for a recent date; date ≈ yesterday since GIBS lags ~1 day).
 
+### 5) VIIRS Nightfire (VNF) — gas-flare evidence (NOAA EO Group)
+- The nightly VNF product is **license-gated since 2025-01-10** (free account + Data Use
+  License application; interim access = ezCSV only) and has **no queryable API** (FIRMS does
+  not carry it). Do NOT build on nightly VNF. Report covers verified dates:
+  `eogdata.mines.edu/global_flare_data/2024_flare_summary_v20250730_j01.kml`.
+- Instead we use the **VNF-derived annual global gas-flare catalog** (freely downloadable,
+  no auth): 14,092 global flare sites (2024) → filtered to the FIRMS India bbox at parse
+  time in `app/services/flares.py` → **423 India flare sites** cached (`flares_cache.json`,
+  720h TTL, git-ignored).
+- Rule use (NOT an ML class): an industrial `fire_type_rule` fire within
+  **FLARE_BUFFER_METERS = 2 km** of a catalog site gets `gas_flare = True` +
+  `distance_to_flare` + `flare_site_name`. Measured on accumulated `fire_history`
+  (2026-09-06): 252/1924 detections (13.1% of all, 60% of the industrial class) — strong
+  supporting evidence, and explainable in the summary (".· near a known gas-flare site
+  (NASA VIIRS Nightfire)"). Frontend has a "Gas-flare sites (VIIRS Nightfire)" overlay.
+
 ## Architecture / Core Logic ("the AI")
 
 1. **Spatial join (rule-based fire type)**: for each FIRMS point, measure distance to
-   OSM industrial polygons (`landuse=industrial`), WRI power-plant points, and vegetation
-   polygons (`natural=wood`, `natural=scrub`, `landuse=forest`) with a per-fire UTM
-   projection. Produces `fire_type_rule`:
+   OSM industrial polygons (`landuse=industrial`), WRI power-plant points, vegetation
+   polygons (`natural=wood`, `natural=scrub`, `landuse=forest`), and OSM mining polygons
+   (`landuse=quarry`, `man_made=mineshaft`) with a per-fire UTM projection. Produces
+   `fire_type_rule`:
    - `industrial` — within **1 km** of an industrial polygon OR a power plant (checked
      first); `industrial_match_source` records `osm` / `power_plant_db` / `both`, and
      `near_power_plant` + `power_plant_name` + `power_plant_distance_m` detail the match
-   - `forest` — not industrial, but within **3 km** of a vegetation polygon (OSM forest
+   - `mining` — not industrial, but within **1 km** of a mining polygon; recorded via
+     `near_mining` + `distance_to_mining` + `mining_site_name` + `mining_zone_type`
+     (quarry / mine). Checked second (industrial wins, mining beats forest/other).
+     Volume measured on history: ~8.6% (1,924 rows) — clears the 5% balance guard.
+   - `forest` — not industrial or mining, but within **3 km** of a vegetation polygon (OSM forest
      polygons are conservative, so the wider radius is a fairer "near natural vegetation")
    - `other_natural` — neither (agricultural/grass burning, isolated events)
+   - Industrial fires within **2 km** of a known VNF gas-flare site additionally get
+     `gas_flare = True` (+ `distance_to_flare`, `flare_site_name`) — a sub-label of
+     industrial, never a competing class (see Data Sources §5).
 2. **Persistence detection**: store each detection (SQLite) keyed by location+time;
    if a hotspot repeats at/near the same coordinates across days/weeks, flag it as a
    **"persistent thermal source"** (term is literally in the SIH title) — e.g.
    `"🔴 Persistent thermal source — Nth occurrence in X days"`.
 3. **ML fire type (weak-label classifier)**: `scripts/train_classifier.py` rebuilds a
    RandomForestClassifier from `fire_history` rows using the rule-based `fire_type_rule`
-   as labels and 8 features (`confidence`, `bright_ti4`, `frp`, `daynight`, `hour`,
-   `distance_to_industrial`, `distance_to_vegetation`, `occurrence_count`). The RF is
+   as labels and 9 features (`confidence`, `bright_ti4`, `frp`, `daynight`, `hour`,
+   `distance_to_industrial`, `distance_to_mining`, `distance_to_vegetation`,
+   `occurrence_count`). The RF is
    wrapped in `CalibratedClassifierCV` (isotonic, cv=5) so `predict_proba` outputs
    calibrated probabilities (`fire_type_ml_confidence` = max calibrated prob), not raw
    vote fractions. `app/services/ml.py` loads `models/fire_classifier.pkl` at runtime and
@@ -127,8 +155,8 @@ sources**, rank by severity, and render everything on a live map dashboard
    `summary` ("Industrial Fire — ≈340 m from a known industrial zone", plus a
    "Recurring — detected N times in the past 14 days…" note for persistent sources),
    `summary_headline`, `summary_detail`, `summary_persistent`, `summary_icon`
-   (🏭 / 🌲 / 🌾) and `explanation` — a one-line "why we think this" naming the
-   exact rule (1-km industrial / 3-km vegetation / neither). `main.py` calls it last,
+   (🏭 / ⛏ / 🌲 / 🌾) and `explanation` — a one-line "why we think this" naming the
+   exact rule (1-km industrial / 1-km mining / 3-km vegetation / neither). `main.py` calls it last,
    after ML, so it sees the persisted counts too.
 5. **Severity scoring (rule-based, no training)**:
    - `confidence` (low/nominal/high)
@@ -288,5 +316,23 @@ sih-fire-detection/
        `explanation` ("why we think this"). Frontend shows the summary big, bold and
        iconed (🏭/🌲/🌾); raw metrics (distance, confidence, frp, brightness) are
        collapsed under an expandable "Details" section in popups and sidebar cards.
+- [x] VNF gas-flare evidence layer: nightly VIIRS Nightfire is license-gated + has no
+       queryable API (reported), so we use the free VNF-derived 2024 annual flare catalog
+       (`app/services/flares.py`, 423 India sites, 720h cache, `/api/flares`). Industrial
+       fires within 2 km of a catalog site get `gas_flare` + `distance_to_flare` +
+       `flare_site_name` (sub-label of industrial, not an ML class). Measured on history:
+       252/1924 (13.1% of all, 60% of industrial). Frontend "Gas-flare sites (VIIRS
+       Nightfire)" overlay + orange gas-flare markers. 58 tests, ruff clean.
+- [x] Mining-zone 4th class: `osm.py` `get_mining_zones()` fetches `landuse=quarry` +
+       `man_made=mineshaft` over the 16-state tiles (10,942 India zones,
+       `mining_zones_cache.json`, 720h TTL, `/api/mining-zones`). Spatial rule labels
+       non-industrial fires within 1 km of a mining polygon as the new `mining` class
+       (`near_mining` + `distance_to_mining` + `mining_site_name` + `mining_zone_type`;
+       industrial wins, mining beats forest/other). `distance_to_mining` added to the 9
+       ML features and the weak-label RF retrained: 1,924 rows (industrial 420 / mining
+       166 / forest 233 / other 1105; mining 8.6% — clears the 5% guard), held-out
+       accuracy 1.00, `distance_to_mining` importance 0.170. Summary adds
+       "Mining/Quarry Fire" ⛏ + explanation. Frontend mining overlay + brown markers +
+       "⛏ Mining" filter tab. 63 tests, ruff clean.
 - [ ] DBSCAN clustering (stretch)
 - [ ] Deployed somewhere accessible for demo

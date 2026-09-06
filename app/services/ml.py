@@ -5,6 +5,7 @@ Loads a RandomForestClassifier trained offline by scripts/train_classifier.py
 on hand-labelled data) and predicts one of three classes:
 
 - "industrial"     — near an OSM industrial zone
+- "mining"         — near an OSM mining zone (quarry / mine shaft)
 - "forest"         — near OSM vegetation/forest polygons
 - "other_natural"  — neither
 
@@ -27,7 +28,7 @@ from . import spatial
 
 logger = logging.getLogger(__name__)
 
-VALID_CLASSES = ("industrial", "forest", "other_natural")
+VALID_CLASSES = ("industrial", "mining", "forest", "other_natural")
 
 # Order of columns passed to the model. MUST match scripts/train_classifier.py.
 FEATURE_COLUMNS = (
@@ -37,6 +38,7 @@ FEATURE_COLUMNS = (
     "daynight",
     "hour",
     "distance_to_industrial",
+    "distance_to_mining",
     "distance_to_vegetation",
     "occurrence_count",
 )
@@ -74,12 +76,15 @@ def _hour_from_acq_time(acq_time) -> float:
 
 
 def features_from_props(properties: dict) -> np.ndarray:
-    """Encode a fire feature's properties into the model's 8 feature values."""
+    """Encode a fire feature's properties into the model's feature values."""
     confidence = _CONFIDENCE_ENCODING.get(properties.get("confidence"), 1)
     daynight = _DAYNIGHT_ENCODING.get(properties.get("daynight"), 1)
     distance_to_industrial = properties.get("distance_m")
     if distance_to_industrial is None:
         distance_to_industrial = _NONE_DISTANCE_FILL
+    distance_to_mining = properties.get("distance_to_mining")
+    if distance_to_mining is None:
+        distance_to_mining = _NONE_DISTANCE_FILL
     distance_to_vegetation = properties.get("vegetation_distance_m")
     if distance_to_vegetation is None:
         distance_to_vegetation = _NONE_DISTANCE_FILL
@@ -92,6 +97,7 @@ def features_from_props(properties: dict) -> np.ndarray:
             float(daynight),
             _hour_from_acq_time(properties.get("acq_time")),
             float(distance_to_industrial),
+            float(distance_to_mining),
             float(distance_to_vegetation),
             _expect(properties.get("occurrence_count")),
         ],

@@ -16,21 +16,28 @@ Fields added to each fire's properties:
 import logging
 
 from ..config import settings
-from .spatial import NEAR_BUFFER_METERS, VEGETATION_BUFFER_METERS
+from .spatial import (
+    MINING_BUFFER_METERS,
+    NEAR_BUFFER_METERS,
+    VEGETATION_BUFFER_METERS,
+)
 
 logger = logging.getLogger(__name__)
 
 NEAR_KM = NEAR_BUFFER_METERS / 1000  # industrial: 1 km
 VEGETATION_KM = VEGETATION_BUFFER_METERS / 1000  # forest: 3 km
+MINING_KM = MINING_BUFFER_METERS / 1000  # mining: 1 km
 
 HEADLINES = {
     "industrial": "Industrial Fire",
+    "mining": "Mining/Quarry Fire",
     "forest": "Forest Fire",
     "other_natural": "Crop/Agricultural Burning",
 }
 
 ICONS = {
     "industrial": "\U0001f3ed",  # factory
+    "mining": "\u26cf\ufe0f",  # pickaxe
     "forest": "\U0001f332",  # evergreen tree
     "other_natural": "\U0001f33e",  # ear of rice
 }
@@ -70,11 +77,31 @@ def _industrial_detail(props: dict) -> str:
     return base
 
 
+def _mining_detail(props: dict) -> str:
+    """Distance/context phrase for the mining headline."""
+    name = props.get("mining_site_name")
+    zone_type = props.get("mining_zone_type") or "mining"
+    d = props.get("distance_to_mining")
+    if d is not None and d < 10:
+        return "burning inside a mapped quarry/mine"
+    where = f" the {name} {zone_type}" if name else f" a known {zone_type}"
+    return f"{_format_distance(d) or 'near'} from{where}"
+
+
 def _explanation(props: dict) -> str:
     """One line saying why the rule picked this class."""
     rule = props.get("fire_type_rule")
     source = props.get("industrial_match_source")
     plant_name = props.get("power_plant_name")
+    if props.get("gas_flare"):
+        flare_name = props.get("flare_site_name")
+        flare_hint = f" {flare_name}" if flare_name else ""
+        return (
+            f"Classified as industrial because it sits within {NEAR_KM:.0f} km of "
+            "an industrial/plant match, and it is also within 2 km of a known "
+            f"gas-flare site{flare_hint} from NASA VIIRS Nightfire (2024) \u2014 "
+            "consistent with a flare."
+        )
     if rule == "industrial":
         if source == "power_plant_db":
             what = (
@@ -94,6 +121,14 @@ def _explanation(props: dict) -> str:
             f"Classified as industrial because it sits within {NEAR_KM:.0f} km of {what}, "
             "confirmed by a live NASA FIRMS hotspot."
         )
+    if rule == "mining":
+        name = props.get("mining_site_name")
+        zone_type = props.get("mining_zone_type") or "mining"
+        location = f" the {name} {zone_type}" if name else f" a mapped OSM {zone_type}"
+        return (
+            f"Classified as mining because it is not near industry but sits within "
+            f"{MINING_KM:.0f} km of{location} (OSM quarry/mine shaft)."
+        )
     if rule == "forest":
         return (
             f"Classified as forest because it is not near industry but sits within "
@@ -110,6 +145,8 @@ def _persistent_note(props: dict, rule: str) -> str:
     lookback = settings.persistence_lookback_days
     if rule == "industrial":
         tail = "an ongoing industrial source rather than a one-time incident"
+    elif rule == "mining":
+        tail = "ongoing heat at a mining/quarry site rather than a one-off event"
     else:
         tail = "a persistent burning area rather than a one-off event"
     return (
@@ -140,12 +177,16 @@ def add_summary(fires_fc: dict) -> dict:
         detail = (
             _industrial_detail(prop)
             if rule == "industrial"
+            else _mining_detail(prop)
+            if rule == "mining"
             else "deep within a vegetation zone"
             if rule == "forest" and (prop.get("vegetation_distance_m") or 0) < 500
             else f"{_format_distance(prop.get('vegetation_distance_m'))} from the nearest vegetation"
             if rule == "forest"
             else "no nearby industrial or forest activity"
         )
+        if prop.get("gas_flare"):
+            detail += " \u00b7 near a known gas-flare site (NASA VIIRS Nightfire)"
 
         persistent = ""
         if prop.get("persistent_thermal_source"):

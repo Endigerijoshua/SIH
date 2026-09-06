@@ -5,8 +5,11 @@ Pure Shapely logic — no model training. Each fire gets a rule-based
 - "industrial"    — within 1 km of an OSM industrial-zone polygon OR a known
                     power plant (WRI Global Power Plant Database point); checked
                     first (industrial is the higher-value signal for this problem)
-- "forest"        — not industrial, but within 3 km of a forest/vegetation polygon
-- "other_natural" — not near either layer (e.g. agricultural burning, grassland)
+- "mining"        — not industrial, but within 1 km of an OSM mining polygon
+                    (landuse=quarry / man_made=mineshaft)
+- "forest"        — not industrial or mining, but within 3 km of a
+                    forest/vegetation polygon
+- "other_natural" — not near any of the above (e.g. agricultural burning, grassland)
 
 The industrial match source is recorded per fire (`industrial_match_source`):
 "osm", "power_plant_db", or "both" — so the dashboard can show that we fuse a
@@ -38,6 +41,8 @@ logger = logging.getLogger(__name__)
 
 NEAR_BUFFER_METERS = 1000
 VEGETATION_BUFFER_METERS = 3000
+FLARE_BUFFER_METERS = 2000
+MINING_BUFFER_METERS = 1000
 SEARCH_RADIUS_METERS = 20000
 _SEARCH_PAD_DEGREES = 0.3
 
@@ -118,6 +123,56 @@ def _nearest_power_plant(
     return round(distance_m, 1), features[i]["properties"] or {}
 
 
+def _nearest_flare(
+    point,
+    features: list,
+    points: list | None = None,
+    tree: STRtree | None = None,
+) -> tuple[float | None, dict | None]:
+    """Nearest known gas-flare site (VNF catalog) in meters + its properties."""
+    if not features:
+        return None, None
+    if points is None:
+        points = [shape(feature["geometry"]) for feature in features]
+    if tree is None:
+        tree = STRtree(points)
+    candidates_index = tree.query_nearest(
+        point, max_distance=_SEARCH_PAD_DEGREES, all_matches=False
+    )
+    if len(candidates_index) == 0:
+        return None, None
+    i = int(candidates_index[0])
+    distance_m = _utm_distance_meters(point, points[i])
+    if distance_m > SEARCH_RADIUS_METERS:
+        return None, None
+    return round(distance_m, 1), features[i]["properties"] or {}
+
+
+def _nearest_mining(
+    point,
+    features: list,
+    polygons: list | None = None,
+    tree: STRtree | None = None,
+) -> tuple[float | None, dict | None]:
+    """Nearest mining polygon (meters) + its properties, or (None, None)."""
+    if not features:
+        return None, None
+    if polygons is None:
+        polygons = [shape(feature["geometry"]) for feature in features]
+    if tree is None:
+        tree = STRtree(polygons)
+    candidates_index = tree.query_nearest(
+        point, max_distance=_SEARCH_PAD_DEGREES, all_matches=False
+    )
+    if len(candidates_index) == 0:
+        return None, None
+    i = int(candidates_index[0])
+    distance_m = _utm_distance_meters(point, polygons[i])
+    if distance_m > SEARCH_RADIUS_METERS:
+        return None, None
+    return round(distance_m, 1), features[i]["properties"] or {}
+
+
 def nearest_zone_info(
     point, industrial_fc: dict, search_meters: int = SEARCH_RADIUS_METERS
 ) -> dict | None:
@@ -192,8 +247,10 @@ def _build_reference_bundle(
     industrial_fc: dict,
     vegetation_fc: dict,
     power_plants_fc: dict,
+    flares_fc: dict,
+    mining_fc: dict,
 ) -> dict:
-    """Parse the three reference layers into shapely geometry + STRtree."""
+    """Parse the reference layers into shapely geometry + STRtree."""
     industrial_polygons = [
         shape(feature["geometry"]) for feature in industrial_fc["features"]
     ]
@@ -203,14 +260,23 @@ def _build_reference_bundle(
     power_plant_points = [
         shape(feature["geometry"]) for feature in power_plants_fc["features"]
     ]
+    flare_points = [shape(feature["geometry"]) for feature in flares_fc["features"]]
+    mining_features = mining_fc["features"]
+    mining_polygons = [shape(feature["geometry"]) for feature in mining_features]
     return {
         "industrial_polygons": industrial_polygons,
         "vegetation_polygons": vegetation_polygons,
         "power_plant_features": power_plants_fc["features"],
         "power_plant_points": power_plant_points,
+        "flare_features": flares_fc["features"],
+        "flare_points": flare_points,
+        "mining_features": mining_features,
+        "mining_polygons": mining_polygons,
         "industrial_tree": STRtree(industrial_polygons),
         "vegetation_tree": STRtree(vegetation_polygons),
         "power_plant_tree": STRtree(power_plant_points) if power_plant_points else None,
+        "flare_tree": STRtree(flare_points) if flare_points else None,
+        "mining_tree": STRtree(mining_polygons) if mining_polygons else None,
     }
 
 
@@ -219,16 +285,24 @@ def annotate_fires(
     industrial_fc: dict,
     vegetation_fc: dict | None = None,
     power_plants_fc: dict | None = None,
+    flares_fc: dict | None = None,
+    mining_fc: dict | None = None,
     cache_version: str | None = None,
 ) -> dict:
     """Add rule-based fire type + proximity flags to every fire feature.
 
     Mutates and returns the input FeatureCollection (fires_fc). Classification
     priority: industrial first (1 km buffer around OSM industrial polygons OR
-    power-plant points), then forest (3 km vegetation buffer — OSM forest/wood
-    polygons are conservative, so a wider radius is a fairer "near natural
-    vegetation" definition), else other_natural. `distance_m` is the distance to
-    whichever industrial feature (OSM polygon or power plant) is nearest.
+    power-plant points), then mining (1 km buffer around OSM mining polygons),
+    then forest (3 km vegetation buffer — OSM forest/wood polygons are
+    conservative, so a wider radius is a fairer "near natural vegetation"
+    definition), else other_natural. `distance_m` is the distance to whichever
+    industrial feature (OSM polygon or power plant) is nearest.
+
+    An industrial fire also within `FLARE_BUFFER_METERS` (2 km) of a known
+    VIIRS Nightfire gas-flare site gets `gas_flare` set on its properties — a
+    sub-label within industrial (evidence from the free VNF-derived annual flare
+    catalog), never a competing class.
 
     `cache_version` (optional) is a caller-held fingerprint identifying the
     reference layers. Pass it from the live endpoints (main.py computes it from
@@ -237,6 +311,8 @@ def annotate_fires(
     """
     vegetation_fc = vegetation_fc or {"type": "FeatureCollection", "features": []}
     power_plants_fc = power_plants_fc or {"type": "FeatureCollection", "features": []}
+    flares_fc = flares_fc or {"type": "FeatureCollection", "features": []}
+    mining_fc = mining_fc or {"type": "FeatureCollection", "features": []}
     power_plant_points, power_plant_tree = _get_spatial_index(power_plants_fc)
 
     if cache_version is not None:
@@ -248,7 +324,7 @@ def annotate_fires(
                 len(industrial_fc.get("features", [])),
             )
             bundle = _build_reference_bundle(
-                industrial_fc, vegetation_fc, power_plants_fc
+                industrial_fc, vegetation_fc, power_plants_fc, flares_fc, mining_fc
             )
             _REFERENCE_CACHE.clear()  # only one live dataset in memory at a time
             _REFERENCE_CACHE[cache_version] = bundle
@@ -260,9 +336,15 @@ def annotate_fires(
         industrial_polygons = bundle["industrial_polygons"]
         vegetation_polygons = bundle["vegetation_polygons"]
         power_plant_points = bundle["power_plant_points"]
+        flare_features = bundle["flare_features"]
+        flare_points = bundle["flare_points"]
+        mining_features = bundle["mining_features"]
+        mining_polygons = bundle["mining_polygons"]
         industrial_tree = bundle["industrial_tree"]
         vegetation_tree = bundle["vegetation_tree"]
         power_plant_tree = bundle["power_plant_tree"]
+        flare_tree = bundle["flare_tree"]
+        mining_tree = bundle["mining_tree"]
     else:
         industrial_polygons = [
             shape(feature["geometry"]) for feature in industrial_fc["features"]
@@ -273,19 +355,27 @@ def annotate_fires(
         power_plant_points = [
             shape(feature["geometry"]) for feature in power_plants_fc["features"]
         ]
+        flare_features = flares_fc["features"]
+        flare_points = [shape(feature["geometry"]) for feature in flare_features]
+        mining_features = mining_fc["features"]
+        mining_polygons = [shape(feature["geometry"]) for feature in mining_features]
         industrial_tree = STRtree(industrial_polygons)
         vegetation_tree = STRtree(vegetation_polygons)
         power_plant_tree = STRtree(power_plant_points) if power_plant_points else None
+        flare_tree = STRtree(flare_points) if flare_points else None
+        mining_tree = STRtree(mining_polygons) if mining_polygons else None
 
     import time as _time
 
     _t0 = _time.perf_counter()
     logger.info(
-        "spatial.annotate_fires: START (%d fires; %d industrial, %d vegetation, %d power plants)",
+        "spatial.annotate_fires: START (%d fires; %d industrial, %d vegetation, %d power plants, %d flares, %d mining)",
         len(fires_fc.get("features", [])),
         len(industrial_polygons),
         len(vegetation_polygons),
         len(power_plant_points),
+        len(flare_points),
+        len(mining_polygons),
     )
 
     for i, feature in enumerate(fires_fc["features"]):
@@ -298,6 +388,12 @@ def annotate_fires(
         prop["power_plant_distance_m"] = None
         prop["industrial_match_source"] = None
         prop["fire_type_rule"] = "other_natural"
+        prop["gas_flare"] = False
+        prop["distance_to_flare"] = None
+        prop["flare_site_name"] = None
+        prop["near_mining"] = False
+        prop["distance_to_mining"] = None
+        prop["mining_site_name"] = None
 
         point = _extract_point(feature)
         if point is None:
@@ -343,8 +439,26 @@ def annotate_fires(
             if near_power_plant
             else None
         )
+
+        mining_distance, mining_props = _nearest_mining(
+            point, mining_features, mining_polygons, mining_tree
+        )
+        if mining_distance is not None:
+            prop["distance_to_mining"] = mining_distance
+            if mining_distance <= MINING_BUFFER_METERS:
+                prop["near_mining"] = True
+                if mining_props:
+                    prop["mining_site_name"] = mining_props.get("name") or (
+                        "quarry" if mining_props.get("landuse") == "quarry" else "mine"
+                    )
+                    prop["mining_zone_type"] = (
+                        "quarry" if mining_props.get("landuse") == "quarry" else "mine"
+                    )
+
         if prop["near_industrial"]:
             prop["fire_type_rule"] = "industrial"
+        elif prop["near_mining"]:
+            prop["fire_type_rule"] = "mining"
 
         vegetation_distance = _nearest_distance_meters(
             point, vegetation_polygons, vegetation_tree
@@ -355,6 +469,17 @@ def annotate_fires(
                 prop["near_vegetation"] = True
                 if prop["fire_type_rule"] == "other_natural":
                     prop["fire_type_rule"] = "forest"
+
+        if prop["fire_type_rule"] == "industrial":
+            flare_distance, flare_props = _nearest_flare(
+                point, flare_features, flare_points, flare_tree
+            )
+            if flare_distance is not None:
+                prop["distance_to_flare"] = flare_distance
+                if flare_distance <= FLARE_BUFFER_METERS:
+                    prop["gas_flare"] = True
+                    if flare_props:
+                        prop["flare_site_name"] = flare_props.get("name")
 
     logger.info(
         "spatial.annotate_fires: END (%d fires processed in %.2fs)",

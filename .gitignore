@@ -33,6 +33,10 @@ models/
 # OSM Overpass fetch caches (rebuilt by app/services/osm.py, 24h TTL)
 industrial_zones_cache.json
 vegetation_zones_cache.json
+mining_zones_cache.json
 
 # WRI power-plant download cache (rebuilt by app/services/powerplants.py)
 power_plants_cache.json
+
+# VNF gas-flare catalog cache (rebuilt by app/services/flares.py, 720h TTL)
+flares_cache.json
