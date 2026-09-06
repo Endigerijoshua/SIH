@@ -151,6 +151,22 @@ def nearest_zone_info(
     }
 
 
+_SPATIAL_INDEX_CACHE: dict[int, tuple[list, STRtree | None]] = {}
+
+
+def _get_spatial_index(fc: dict | None) -> tuple[list, STRtree | None]:
+    if not fc or not fc.get("features"):
+        return [], None
+    key = id(fc)
+    cached = _SPATIAL_INDEX_CACHE.get(key)
+    if cached is not None:
+        return cached
+    polygons = [shape(feature["geometry"]) for feature in fc["features"]]
+    tree = STRtree(polygons) if polygons else None
+    _SPATIAL_INDEX_CACHE[key] = (polygons, tree)
+    return polygons, tree
+
+
 def _extract_point(feature: dict):
     """Return the feature's Point geometry, or None if it is unusable."""
     try:
@@ -221,6 +237,7 @@ def annotate_fires(
     """
     vegetation_fc = vegetation_fc or {"type": "FeatureCollection", "features": []}
     power_plants_fc = power_plants_fc or {"type": "FeatureCollection", "features": []}
+    power_plant_points, power_plant_tree = _get_spatial_index(power_plants_fc)
 
     if cache_version is not None:
         bundle = _REFERENCE_CACHE.get(cache_version)

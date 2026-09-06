@@ -8,10 +8,19 @@ import asyncio
 import logging
 from pathlib import Path
 
+# pyrefly: ignore [missing-import]
 import httpx
+
+# pyrefly: ignore [missing-import]
 from fastapi import FastAPI, HTTPException
+
+# pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
+
+# pyrefly: ignore [missing-import]
 from fastapi.responses import FileResponse, HTMLResponse
+
+# pyrefly: ignore [missing-import]
 from fastapi.staticfiles import StaticFiles
 
 from . import db
@@ -74,9 +83,16 @@ async def get_fires(days: int | None = None) -> dict:
     `days` overrides the FIRMS lookback window (default from settings/.env).
     Every returned detection is also appended to the local SQLite fire_history.
     """
-    fires_fc = await firms.fetch_fires(days=days)
-    db.record_featurecollection(fires_fc)
-    return fires_fc
+    try:
+        fires_fc = await firms.fetch_fires(days=days)
+        db.record_featurecollection(fires_fc)
+        return fires_fc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (httpx.HTTPError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=502, detail=f"NASA FIRMS API error: {exc}"
+        ) from exc
 
 
 @app.get("/api/industrial-zones")
@@ -109,36 +125,47 @@ async def get_power_plants() -> dict:
 @app.get("/api/flagged-fires")
 async def get_flagged_fires(days: int | None = None) -> dict:
     """Live fires annotated with rule-based + ML fire type and persistence."""
-    fires_fc = await firms.fetch_fires(days=days)
-    db.record_featurecollection(fires_fc)
-    logger.info("[flagged-fires] %d fires fetched", len(fires_fc.get("features", [])))
-    industrial_fc, vegetation_fc, power_plants_fc = await _reference_layers()
-    logger.info(
-        "[flagged-fires] reference layers loaded: %d industrial, %d vegetation, %d power plants",
-        len(industrial_fc.get("features", [])),
-        len(vegetation_fc.get("features", [])),
-        len(power_plants_fc.get("features", [])),
-    )
-    logger.info("[flagged-fires] START spatial.annotate_fires")
-    spatial.annotate_fires(
-        fires_fc,
-        industrial_fc,
-        vegetation_fc,
-        power_plants_fc,
-        cache_version=_reference_cache_version(),
-    )
-    logger.info("[flagged-fires] END spatial.annotate_fires")
-    logger.info("[flagged-fires] START persistence.annotate_persistence")
-    persistence.annotate_persistence(fires_fc)
-    logger.info("[flagged-fires] END persistence.annotate_persistence")
-    logger.info("[flagged-fires] START ml.annotate_fire_type_ml")
-    ml.annotate_fire_type_ml(fires_fc)
-    logger.info("[flagged-fires] END ml.annotate_fire_type_ml")
-    logger.info("[flagged-fires] START summary.add_summary")
-    summary.add_summary(fires_fc)
-    logger.info("[flagged-fires] END summary.add_summary")
-    logger.info("[flagged-fires] complete: %d fires", len(fires_fc.get("features", [])))
-    return fires_fc
+    try:
+        fires_fc = await firms.fetch_fires(days=days)
+        db.record_featurecollection(fires_fc)
+        logger.info(
+            "[flagged-fires] %d fires fetched", len(fires_fc.get("features", []))
+        )
+        industrial_fc, vegetation_fc, power_plants_fc = await _reference_layers()
+        logger.info(
+            "[flagged-fires] reference layers loaded: %d industrial, %d vegetation, %d power plants",
+            len(industrial_fc.get("features", [])),
+            len(vegetation_fc.get("features", [])),
+            len(power_plants_fc.get("features", [])),
+        )
+        logger.info("[flagged-fires] START spatial.annotate_fires")
+        spatial.annotate_fires(
+            fires_fc,
+            industrial_fc,
+            vegetation_fc,
+            power_plants_fc,
+            cache_version=_reference_cache_version(),
+        )
+        logger.info("[flagged-fires] END spatial.annotate_fires")
+        logger.info("[flagged-fires] START persistence.annotate_persistence")
+        persistence.annotate_persistence(fires_fc)
+        logger.info("[flagged-fires] END persistence.annotate_persistence")
+        logger.info("[flagged-fires] START ml.annotate_fire_type_ml")
+        ml.annotate_fire_type_ml(fires_fc)
+        logger.info("[flagged-fires] END ml.annotate_fire_type_ml")
+        logger.info("[flagged-fires] START summary.add_summary")
+        summary.add_summary(fires_fc)
+        logger.info("[flagged-fires] END summary.add_summary")
+        logger.info(
+            "[flagged-fires] complete: %d fires", len(fires_fc.get("features", []))
+        )
+        return fires_fc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (httpx.HTTPError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Upstream API error: {exc}"
+        ) from exc
 
 
 async def _reference_layers() -> tuple[dict, dict, dict]:
@@ -184,19 +211,26 @@ def _reference_cache_version() -> str:
 @app.get("/api/thermal-sites")
 async def get_thermal_sites(days: int | None = None) -> dict:
     """DBSCAN-cluster persistent recurrences into named industrial sites."""
-    fires_fc = await firms.fetch_fires(days=days)
-    db.record_featurecollection(fires_fc)
-    industrial_fc, vegetation_fc, power_plants_fc = await _reference_layers()
-    spatial.annotate_fires(
-        fires_fc,
-        industrial_fc,
-        vegetation_fc,
-        power_plants_fc,
-        cache_version=_reference_cache_version(),
-    )
-    persistence.annotate_persistence(fires_fc)
-    ml.annotate_fire_type_ml(fires_fc)
-    return clustering.cluster_persistent_fires(fires_fc, industrial_fc)
+    try:
+        fires_fc = await firms.fetch_fires(days=days)
+        db.record_featurecollection(fires_fc)
+        industrial_fc, vegetation_fc, power_plants_fc = await _reference_layers()
+        spatial.annotate_fires(
+            fires_fc,
+            industrial_fc,
+            vegetation_fc,
+            power_plants_fc,
+            cache_version=_reference_cache_version(),
+        )
+        persistence.annotate_persistence(fires_fc)
+        ml.annotate_fire_type_ml(fires_fc)
+        return clustering.cluster_persistent_fires(fires_fc, industrial_fc)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (httpx.HTTPError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Upstream API error: {exc}"
+        ) from exc
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

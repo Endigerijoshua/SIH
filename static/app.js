@@ -195,25 +195,45 @@ function sitePopupContent(prop) {
   return `<p style="margin:0 0 4px;font-weight:600;color:${SITE_COLOR}">${prop.site_name}</p>${body}`;
 }
 
+let currentCategoryFilter = "all";
+
+function markerStyle(props) {
+  const isPersistent = props.persistent_thermal_source;
+  const fireType = props.fire_type_rule || "other_natural";
+  let color = "#777777";
+  let weight = 1;
+
+  if (isPersistent) {
+    color = "#b91c1c";
+    weight = 2;
+  } else if (fireType === "industrial" || props.near_industrial) {
+    color = "#1f2d3d";
+    weight = 2;
+  } else if (fireType === "forest") {
+    color = "#2e7d32";
+    weight = 2;
+  } else {
+    color = "#8d6e63";
+    weight = 1;
+  }
+
+  return {
+    radius: isPersistent ? 10 : (fireType === "industrial" ? 7 : 5),
+    color: color,
+    weight: weight,
+    dashArray: isPersistent ? "4 4" : null,
+    fillColor: confidenceColor(props.confidence),
+    fillOpacity: 0.85,
+  };
+}
+
 function renderFireMarkers(features) {
   fireLayer.clearLayers();
   fireMarkers.clear();
   for (const feature of features) {
     const [lon, lat] = feature.geometry.coordinates;
     const props = feature.properties || {};
-    const isPersistent = props.persistent_thermal_source;
-    const marker = L.circleMarker([lat, lon], {
-      radius: isPersistent ? 10 : 6,
-      color: isPersistent
-        ? "#b91c1c"
-        : props.near_industrial
-          ? "#1f2d3d"
-          : "#333333",
-      weight: isPersistent || props.near_industrial ? 2 : 1,
-      dashArray: isPersistent ? "4 4" : null,
-      fillColor: confidenceColor(props.confidence),
-      fillOpacity: 0.85,
-    })
+    const marker = L.circleMarker([lat, lon], markerStyle(props))
       .bindPopup(firePopupContent(props))
       .addTo(fireLayer);
     fireMarkers.set(feature.id, marker);
@@ -259,7 +279,10 @@ function sectionTitle(label) {
 function buildEntry(feature) {
   const props = feature.properties;
   const entry = document.createElement("div");
-  entry.className = "entry";
+  const typeClass = props.persistent_thermal_source
+    ? "entry-persistent"
+    : `entry-${props.fire_type_rule || "other_natural"}`;
+  entry.className = `entry ${typeClass}`;
   entry.insertAdjacentHTML("beforeend", fireVerdictHtml(props));
 
   entry.addEventListener("click", () => {
@@ -310,43 +333,87 @@ function buildSiteEntry(feature) {
 }
 
 function renderDetectionsSidebar(features) {
-  const persistent = features
-    .filter((f) => f.properties && f.properties.persistent_thermal_source)
-    .sort(
-      (a, b) =>
-        b.properties.occurrence_count - a.properties.occurrence_count ||
-        a.properties.distance_m - b.properties.distance_m,
-    );
-  const flagged = features
-    .filter(
-      (f) =>
-        f.properties &&
-        f.properties.near_industrial &&
-        !f.properties.persistent_thermal_source,
-    )
-    .sort((a, b) => a.properties.distance_m - b.properties.distance_m);
+  const persistent = [];
+  const industrial = [];
+  const forest = [];
+  const other_natural = [];
+
+  for (const f of features) {
+    const p = f.properties || {};
+    if (p.persistent_thermal_source) {
+      persistent.push(f);
+    }
+    const fireType = p.fire_type_rule || "other_natural";
+    if (fireType === "industrial" || p.near_industrial) {
+      industrial.push(f);
+    } else if (fireType === "forest") {
+      forest.push(f);
+    } else {
+      other_natural.push(f);
+    }
+  }
+
+  persistent.sort(
+    (a, b) =>
+      (b.properties.occurrence_count || 0) - (a.properties.occurrence_count || 0) ||
+      (a.properties.distance_m || 99999) - (b.properties.distance_m || 99999),
+  );
+  industrial.sort((a, b) => (a.properties.distance_m || 99999) - (b.properties.distance_m || 99999));
+  forest.sort((a, b) => (a.properties.vegetation_distance_m || 99999) - (b.properties.vegetation_distance_m || 99999));
+  other_natural.sort((a, b) => (b.properties.frp || 0) - (a.properties.frp || 0));
+
+  // Update filter badge counts
+  const countAllEl = document.getElementById("count-all");
+  const countIndEl = document.getElementById("count-ind");
+  const countForestEl = document.getElementById("count-forest");
+  const countNatEl = document.getElementById("count-nat");
+  const countPersistEl = document.getElementById("count-persist");
+
+  if (countAllEl) countAllEl.textContent = features.length;
+  if (countIndEl) countIndEl.textContent = industrial.length;
+  if (countForestEl) countForestEl.textContent = forest.length;
+  if (countNatEl) countNatEl.textContent = other_natural.length;
+  if (countPersistEl) countPersistEl.textContent = persistent.length;
 
   listEl.innerHTML = "";
-  if (persistent.length === 0 && flagged.length === 0) {
+
+  const renderSection = (title, items) => {
+    if (items.length > 0) {
+      listEl.appendChild(sectionTitle(`${title} (${items.length})`));
+      for (const f of items) listEl.appendChild(buildEntry(f));
+    }
+  };
+
+  if (currentCategoryFilter === "persistent") {
+    renderSection("Persistent Thermal Sources", persistent);
+  } else if (currentCategoryFilter === "industrial") {
+    renderSection("Industrial Fires & Power Plants", industrial);
+  } else if (currentCategoryFilter === "forest") {
+    renderSection("Forest & Vegetation Fires", forest);
+  } else if (currentCategoryFilter === "other_natural") {
+    renderSection("Crop / Agricultural Burning & Natural Hotspots", other_natural);
+  } else {
+    // "all" tab
+    renderSection("Persistent Thermal Sources", persistent);
+    renderSection("Industrial Fires & Power Plants", industrial);
+    renderSection("Forest & Vegetation Fires", forest);
+    renderSection("Crop / Agricultural Burning & Natural Hotspots", other_natural);
+  }
+
+  if (listEl.children.length === 0) {
     const el = document.createElement("div");
     el.className = "empty";
-    el.textContent = "No persistent sources or flagged detections right now.";
+    el.textContent = "No detections matching this filter.";
     listEl.appendChild(el);
-    return;
   }
-  if (persistent.length > 0) {
-    listEl.appendChild(
-      sectionTitle(`Persistent thermal sources (${persistent.length})`),
-    );
-    for (const feature of persistent) listEl.appendChild(buildEntry(feature));
-  }
-  if (flagged.length > 0) {
-    listEl.appendChild(
-      sectionTitle(`Near industrial zones (${flagged.length})`),
-    );
-    for (const feature of flagged) listEl.appendChild(buildEntry(feature));
-  }
-  return { persistent: persistent.length, flagged: flagged.length };
+
+  return {
+    total: features.length,
+    persistent: persistent.length,
+    industrial: industrial.length,
+    forest: forest.length,
+    natural: other_natural.length,
+  };
 }
 
 function renderSitesSidebar(sitesFC) {
@@ -406,9 +473,11 @@ async function loadDetections(force = false) {
     renderPowerPlants(cache.powerFC);
     const counts = renderDetectionsSidebar(features);
     summaryEl.textContent =
-      `${features.length} live hotspots · ` +
-      `${counts.persistent} persistent thermal sources · ` +
-      `${counts.flagged} flagged near industrial zones`;
+      `${counts.total} live hotspots · ` +
+      `${counts.industrial} 🏭 industrial · ` +
+      `${counts.forest} 🌲 forest · ` +
+      `${counts.natural} 🌾 agri/natural · ` +
+      `${counts.persistent} 🔴 persistent`;
   } catch (err) {
     console.error(err);
     showError(`Failed to load detections: ${err.message}`);
@@ -441,10 +510,31 @@ async function loadSites(force = false) {
 async function fetchJson(url) {
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(`${url} -> HTTP ${response.status}`);
+    let detail = "";
+    try {
+      const data = await response.json();
+      if (data && data.detail) {
+        detail = `: ${data.detail}`;
+      }
+    } catch {
+      // Not JSON or empty body
+    }
+    throw new Error(`${url} -> HTTP ${response.status}${detail}`);
   }
   return response.json();
 }
+
+// Category filter tabs
+document.querySelectorAll(".filter-tab").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".filter-tab").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    currentCategoryFilter = btn.dataset.category || "all";
+    if (cache.firesFC && cache.firesFC.features) {
+      renderDetectionsSidebar(cache.firesFC.features);
+    }
+  });
+});
 
 detectionsBtn.addEventListener("click", () => loadDetections());
 sitesBtn.addEventListener("click", () => loadSites());

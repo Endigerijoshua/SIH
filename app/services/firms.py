@@ -18,7 +18,7 @@ import logging
 import httpx
 import pandas as pd
 
-from ..config import settings
+from ..config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -125,10 +125,11 @@ async def fetch_fires(
     httpx.HTTPStatusError on a non-200 response, and httpx.RequestError on
     network failures.
     """
-    api_key = api_key or settings.firms_map_key
-    dataset = dataset or settings.firms_dataset
-    bbox = bbox or settings.firms_bbox
-    days = days or settings.firms_days
+    cfg = get_settings()
+    api_key = api_key or cfg.firms_map_key
+    dataset = dataset or cfg.firms_dataset
+    bbox = bbox or cfg.firms_bbox
+    days = days or cfg.firms_days
 
     url = build_url(api_key, dataset, bbox, days)
     logger.info("fetching FIRMS CSV: %s", url)

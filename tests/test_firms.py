@@ -52,3 +52,13 @@ def test_csv_to_geojson():
 def test_csv_to_geojson_no_rows_dropped():
     fc = firms.csv_to_geojson(SAMPLE_CSV)
     assert len(fc["features"]) == 3
+
+
+def test_missing_firms_map_key_returns_400(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "firms_map_key", "")
+    client = TestClient(app)
+    resp = client.get("/api/flagged-fires")
+    assert resp.status_code == 400
+    assert "FIRMS_MAP_KEY" in resp.json()["detail"]
