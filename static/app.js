@@ -1,6 +1,13 @@
 /* SIH26162 — Leaflet dashboard: FIRMS fire points × OSM industrial zones ×
    WRI power plants, with NASA GIBS satellite imagery as a toggleable base layer
-   and a switch between individual detections and clustered thermal sites. */
+   and a switch between individual detections and clustered thermal sites.
+
+   Filter model: every fire belongs to exactly ONE category (persistent → flare →
+   industrial → mining → forest → other_natural). The sidebar list and the map
+   markers are both driven by that single assignment, so a filter tab shows the
+   same fires in both. Map markers are grouped per category in their own
+   L.layerGroup; switching tabs only shows/hides whole groups (no per-marker
+   re-filtering, no data re-fetch). */
 "use strict";
 
 const FIRES_URL = "/api/flagged-fires";
@@ -10,17 +17,46 @@ const POWER_PLANTS_URL = "/api/power-plants";
 const FLARES_URL = "/api/flares";
 const MINING_URL = "/api/mining-zones";
 
+/* Ember→amber→pale severity ramp (matches the CSS custom properties). */
 const CONFIDENCE_COLORS = {
-  h: "#d7191c",
-  n: "#fd8d3c",
-  l: "#ffd700",
+  h: "#e5484d",
+  n: "#f59e0b",
+  l: "#fde68a",
 };
 const CONFIDENCE_LABELS = { h: "high", n: "nominal", l: "low" };
 
-const SITE_COLOR = "#7a2ea0";
-const POWER_PLANT_COLOR = "#6a5acd";
-const FLARE_COLOR = "#e65100";
-const MINING_COLOR = "#4e342e";
+const CATEGORY_ORDER = [
+  "persistent",
+  "flare",
+  "industrial",
+  "mining",
+  "forest",
+  "other_natural",
+];
+
+const CATEGORY_TITLES = {
+  persistent: "Persistent Thermal Sources",
+  flare: "Gas-Flare Fires",
+  industrial: "Industrial Fires & Power Plants",
+  mining: "Mining & Quarry Fires",
+  forest: "Forest & Vegetation Fires",
+  other_natural: "Crop / Agricultural Burning & Natural Hotspots",
+};
+
+/* Category accent colors for the map markers (mirror of the CSS palette). */
+const CATEGORY_COLORS = {
+  persistent: "#fbbf24",
+  flare: "#f97316",
+  industrial: "#60a5fa",
+  mining: "#ca8a04",
+  forest: "#34d399",
+  other_natural: "#8b93a3",
+};
+
+const SITE_COLOR = "#c084fc";
+const POWER_PLANT_COLOR = "#818cf8";
+const FLARE_COLOR = "#f97316";
+const MINING_COLOR = "#a16207";
 
 // GIBS WAITS ~1 day to publish true-color; use yesterday so tiles always exist.
 const GIBS_DATE = new Date(Date.now() - 24 * 3600 * 1000)
@@ -52,10 +88,10 @@ const gibsVIIRS = L.tileLayer(
 
 const zoneLayer = L.geoJSON(null, {
   style: {
-    color: "#3388ff",
+    color: "#22d3ee",
     weight: 1,
-    fillColor: "#3388ff",
-    fillOpacity: 0.18,
+    fillColor: "#22d3ee",
+    fillOpacity: 0.15,
   },
   onEachFeature: (feature, layer) => {
     const props = feature.properties || {};
@@ -147,12 +183,16 @@ L.control
   )
   .addTo(map);
 
-const fireMarkers = new Map();
-const fireLayer = L.layerGroup().addTo(map);
-const siteLayer = L.layerGroup();
+/* One Leaflet layer group per fire category. Toggling a tab = show/hide the
+   whole group, never touching individual markers. */
+const fireGroups = {};
+for (const cat of CATEGORY_ORDER) {
+  fireGroups[cat] = L.layerGroup();
+  fireGroups[cat].addTo(map);
+}
 
-const SITE_LAYER_ID = "siteLayer";
-const FIRE_LAYER_ID = "fireLayer";
+const fireMarkers = new Map();
+const siteLayer = L.layerGroup();
 
 const listEl = document.getElementById("list");
 const summaryEl = document.getElementById("summary");
@@ -161,9 +201,10 @@ const sitesBtn = document.getElementById("view-sites");
 
 const cache = { firesFC: null, zonesFC: null, sitesFC: null, powerFC: null, flaresFC: null, miningFC: null };
 let currentView = "detections";
+let currentCategoryFilter = "all";
 
 function confidenceColor(confidence) {
-  return CONFIDENCE_COLORS[confidence] || "#888888";
+  return CONFIDENCE_COLORS[confidence] || "#8892a6";
 }
 
 function confidenceLabel(confidence) {
@@ -180,6 +221,17 @@ function formatDistance(meters) {
 function formatTime(acqDate, acqTime) {
   const time = String(acqTime).padStart(4, "0");
   return `${acqDate} ${time.slice(0, 2)}:${time.slice(2)} UTC`;
+}
+
+/* Single category per fire; the sidebar and map both use this. */
+function fireCategory(props) {
+  if (props.persistent_thermal_source) return "persistent";
+  if (props.gas_flare) return "flare";
+  const t = props.fire_type_rule || "other_natural";
+  if (t === "industrial" || props.near_industrial) return "industrial";
+  if (t === "mining" || props.near_mining) return "mining";
+  if (t === "forest") return "forest";
+  return "other_natural";
 }
 
 function fireKvHtml(props) {
@@ -218,6 +270,7 @@ function fireKvHtml(props) {
 function fireVerdictHtml(props) {
   const icon = props.summary_icon || "\u{1F525}";
   const headline = props.summary_headline || "Fire";
+  const cat = fireCategory(props);
   const detail = props.summary_detail ? `<div class="detail">${props.summary_detail}</div>` : "";
   const persistent = props.summary_persistent
     ? `<div class="persist">${props.summary_persistent}</div>`
@@ -226,7 +279,7 @@ function fireVerdictHtml(props) {
     ? `<div class="reason">${props.explanation}</div>`
     : "";
   return (
-    `<div class="verdict"><span class="icon">${icon}</span>${headline}</div>` +
+    `<div class="verdict"><span class="badge badge-${cat}">${icon}</span>${headline}</div>` +
     detail +
     persistent +
     reason +
@@ -249,38 +302,16 @@ function sitePopupContent(prop) {
   return `<p style="margin:0 0 4px;font-weight:600;color:${SITE_COLOR}">${prop.site_name}</p>${body}`;
 }
 
-let currentCategoryFilter = "all";
-
 function markerStyle(props) {
   const isPersistent = props.persistent_thermal_source;
-  const fireType = props.fire_type_rule || "other_natural";
-  let color = "#777777";
-  let weight = 1;
-
-  if (isPersistent) {
-    color = "#b91c1c";
-    weight = 2;
-  } else if (props.gas_flare) {
-    color = FLARE_COLOR;
-    weight = 2;
-  } else if (fireType === "industrial" || props.near_industrial) {
-    color = "#1f2d3d";
-    weight = 2;
-  } else if (fireType === "mining" || props.near_mining) {
-    color = MINING_COLOR;
-    weight = 2;
-  } else if (fireType === "forest") {
-    color = "#2e7d32";
-    weight = 2;
-  } else {
-    color = "#8d6e63";
-    weight = 1;
-  }
-
+  const cat = fireCategory(props);
+  const color = isPersistent
+    ? CATEGORY_COLORS.persistent
+    : CATEGORY_COLORS[cat] || CATEGORY_COLORS.other_natural;
   return {
-    radius: isPersistent ? 10 : (fireType === "industrial" ? 7 : 5),
+    radius: isPersistent ? 10 : (cat === "industrial" || cat === "flare" ? 7 : 5),
     color: color,
-    weight: weight,
+    weight: isPersistent ? 2 : 1.5,
     dashArray: isPersistent ? "4 4" : null,
     fillColor: confidenceColor(props.confidence),
     fillOpacity: 0.85,
@@ -288,16 +319,22 @@ function markerStyle(props) {
 }
 
 function renderFireMarkers(features) {
-  fireLayer.clearLayers();
+  for (const g of Object.values(fireGroups)) g.clearLayers();
   fireMarkers.clear();
   for (const feature of features) {
     const [lon, lat] = feature.geometry.coordinates;
     const props = feature.properties || {};
+    const cat = fireCategory(props);
     const marker = L.circleMarker([lat, lon], markerStyle(props))
       .bindPopup(firePopupContent(props))
-      .addTo(fireLayer);
+      .addTo(fireGroups[cat]);
+    if (props.persistent_thermal_source) {
+      const el = marker.getElement();
+      if (el) el.classList.add("marker-persistent");
+    }
     fireMarkers.set(feature.id, marker);
   }
+  applyFireFilter();
 }
 
 function renderSiteMarkers(sitesFC) {
@@ -336,31 +373,38 @@ function renderMiningZones(featureCollection) {
   miningLayer.addData(featureCollection);
 }
 
-function sectionTitle(label) {
+function sectionTitle(label, count) {
   const div = document.createElement("div");
-  div.className = "empty";
+  div.className = "section-title";
   div.style.textAlign = "left";
-  div.style.fontWeight = "600";
-  div.style.padding = "12px 16px 4px";
-  div.textContent = label;
+  div.innerHTML = `${label} <span class="n">(${count})</span>`;
   return div;
+}
+
+function highlightMarker(featureId, on) {
+  const marker = fireMarkers.get(featureId);
+  if (!marker) return;
+  const el = marker.getElement && marker.getElement();
+  if (el) el.classList.toggle("marker-hover", on);
 }
 
 function buildEntry(feature) {
   const props = feature.properties;
+  const cat = fireCategory(props);
   const entry = document.createElement("div");
-  const typeClass = props.persistent_thermal_source
-    ? "entry-persistent"
-    : `entry-${props.fire_type_rule || "other_natural"}`;
-  entry.className = `entry ${typeClass}`;
+  entry.className = `entry entry-${cat}`;
   entry.insertAdjacentHTML("beforeend", fireVerdictHtml(props));
 
   entry.addEventListener("click", () => {
     const [lon, lat] = feature.geometry.coordinates;
+    highlightMarker(feature.id, true);
     map.flyTo([lat, lon], 12);
     const marker = fireMarkers.get(feature.id);
     if (marker) marker.openPopup();
+    setTimeout(() => highlightMarker(feature.id, false), 900);
   });
+  entry.addEventListener("mouseenter", () => highlightMarker(feature.id, true));
+  entry.addEventListener("mouseleave", () => highlightMarker(feature.id, false));
   return entry;
 }
 
@@ -402,81 +446,92 @@ function buildSiteEntry(feature) {
   return entry;
 }
 
-function renderDetectionsSidebar(features) {
-  const persistent = [];
-  const industrial = [];
-  const mining = [];
-  const forest = [];
-  const other_natural = [];
+function animateCount(el, target) {
+  if (!el) return;
+  const from = parseInt(el.textContent, 10) || 0;
+  if (from === target) {
+    el.textContent = String(target);
+    return;
+  }
+  if (el._raf) cancelAnimationFrame(el._raf);
+  const t0 = performance.now();
+  const dur = 420;
+  const frame = (t) => {
+    const p = Math.min(1, (t - t0) / dur);
+    el.textContent = Math.round(from + (target - from) * (1 - Math.pow(1 - p, 3)));
+    if (p < 1) el._raf = requestAnimationFrame(frame);
+  };
+  el._raf = requestAnimationFrame(frame);
+}
 
-  for (const f of features) {
-    const p = f.properties || {};
-    if (p.persistent_thermal_source) {
-      persistent.push(f);
-    }
-    const fireType = p.fire_type_rule || "other_natural";
-    if (fireType === "industrial" || p.near_industrial) {
-      industrial.push(f);
-    } else if (fireType === "mining" || p.near_mining) {
-      mining.push(f);
-    } else if (fireType === "forest") {
-      forest.push(f);
+function fadeInList() {
+  listEl.classList.remove("list-fade");
+  void listEl.offsetWidth;
+  listEl.classList.add("list-fade");
+}
+
+function triggerMapSweep() {
+  const mapEl = document.getElementById("map");
+  mapEl.classList.remove("map-sweep");
+  void mapEl.offsetWidth;
+  mapEl.classList.add("map-sweep");
+}
+
+/* Show/hide whole Leaflet layer groups per the active filter tab. */
+function applyFireFilter() {
+  if (currentView !== "detections") return;
+  for (const [cat, group] of Object.entries(fireGroups)) {
+    if (currentCategoryFilter === "all" || cat === currentCategoryFilter) {
+      showLayer(group);
     } else {
-      other_natural.push(f);
+      hideLayer(group);
     }
   }
+}
 
-  persistent.sort(
-    (a, b) =>
+function renderDetectionsSidebar(features) {
+  const buckets = {};
+  for (const cat of CATEGORY_ORDER) buckets[cat] = [];
+
+  for (const f of features) {
+    const cat = fireCategory(f.properties || {});
+    buckets[cat].push(f);
+  }
+
+  const sorters = {
+    persistent: (a, b) =>
       (b.properties.occurrence_count || 0) - (a.properties.occurrence_count || 0) ||
       (a.properties.distance_m || 99999) - (b.properties.distance_m || 99999),
-  );
-  industrial.sort((a, b) => (a.properties.distance_m || 99999) - (b.properties.distance_m || 99999));
-  mining.sort((a, b) => (a.properties.distance_to_mining || 99999) - (b.properties.distance_to_mining || 99999));
-  forest.sort((a, b) => (a.properties.vegetation_distance_m || 99999) - (b.properties.vegetation_distance_m || 99999));
-  other_natural.sort((a, b) => (b.properties.frp || 0) - (a.properties.frp || 0));
+    flare: (a, b) => (a.properties.distance_to_flare || 99999) - (b.properties.distance_to_flare || 99999),
+    industrial: (a, b) => (a.properties.distance_m || 99999) - (b.properties.distance_m || 99999),
+    mining: (a, b) => (a.properties.distance_to_mining || 99999) - (b.properties.distance_to_mining || 99999),
+    forest: (a, b) => (a.properties.vegetation_distance_m || 99999) - (b.properties.vegetation_distance_m || 99999),
+    other_natural: (a, b) => (b.properties.frp || 0) - (a.properties.frp || 0),
+  };
+  for (const cat of CATEGORY_ORDER) buckets[cat].sort(sorters[cat]);
 
-  // Update filter badge counts
-  const countAllEl = document.getElementById("count-all");
-  const countIndEl = document.getElementById("count-ind");
-  const countMiningEl = document.getElementById("count-mining");
-  const countForestEl = document.getElementById("count-forest");
-  const countNatEl = document.getElementById("count-nat");
-  const countPersistEl = document.getElementById("count-persist");
+  const countElId = (cat) =>
+    ({ industrial: "ind", other_natural: "nat", persistent: "persist" })[cat] || cat;
 
-  if (countAllEl) countAllEl.textContent = features.length;
-  if (countIndEl) countIndEl.textContent = industrial.length;
-  if (countMiningEl) countMiningEl.textContent = mining.length;
-  if (countForestEl) countForestEl.textContent = forest.length;
-  if (countNatEl) countNatEl.textContent = other_natural.length;
-  if (countPersistEl) countPersistEl.textContent = persistent.length;
+  // Animated stat badge counts
+  animateCount(document.getElementById("count-all"), features.length);
+  for (const cat of CATEGORY_ORDER) {
+    animateCount(document.getElementById(`count-${countElId(cat)}`), buckets[cat].length);
+  }
 
   listEl.innerHTML = "";
 
-  const renderSection = (title, items) => {
-    if (items.length > 0) {
-      listEl.appendChild(sectionTitle(`${title} (${items.length})`));
-      for (const f of items) listEl.appendChild(buildEntry(f));
-    }
+  const renderSection = (cat) => {
+    const items = buckets[cat];
+    if (items.length === 0) return;
+    listEl.appendChild(sectionTitle(CATEGORY_TITLES[cat], items.length));
+    for (const f of items) listEl.appendChild(buildEntry(f));
   };
 
-  if (currentCategoryFilter === "persistent") {
-    renderSection("Persistent Thermal Sources", persistent);
-  } else if (currentCategoryFilter === "industrial") {
-    renderSection("Industrial Fires & Power Plants", industrial);
-  } else if (currentCategoryFilter === "mining") {
-    renderSection("Mining & Quarry Fires", mining);
-  } else if (currentCategoryFilter === "forest") {
-    renderSection("Forest & Vegetation Fires", forest);
-  } else if (currentCategoryFilter === "other_natural") {
-    renderSection("Crop / Agricultural Burning & Natural Hotspots", other_natural);
+  if (currentCategoryFilter === "all") {
+    for (const cat of CATEGORY_ORDER) renderSection(cat);
   } else {
-    // "all" tab
-    renderSection("Persistent Thermal Sources", persistent);
-    renderSection("Industrial Fires & Power Plants", industrial);
-    renderSection("Mining & Quarry Fires", mining);
-    renderSection("Forest & Vegetation Fires", forest);
-    renderSection("Crop / Agricultural Burning & Natural Hotspots", other_natural);
+    renderSection(currentCategoryFilter);
   }
 
   if (listEl.children.length === 0) {
@@ -486,14 +541,33 @@ function renderDetectionsSidebar(features) {
     listEl.appendChild(el);
   }
 
+  fadeInList();
+
   return {
     total: features.length,
-    persistent: persistent.length,
-    industrial: industrial.length,
-    mining: mining.length,
-    forest: forest.length,
-    natural: other_natural.length,
+    persistent: buckets.persistent.length,
+    flare: buckets.flare.length,
+    industrial: buckets.industrial.length,
+    mining: buckets.mining.length,
+    forest: buckets.forest.length,
+    natural: buckets.other_natural.length,
   };
+}
+
+function setSummaryCounts(counts) {
+  summaryEl.innerHTML =
+    `<span class="big" id="s-total">0</span> live hotspots &middot; ` +
+    `<span id="s-ind">0</span> \u{1F3ED} ind &middot; ` +
+    `<span id="s-mining">0</span> \u{26CF}\uFE0F mining &middot; ` +
+    `<span id="s-forest">0</span> \u{1F332} forest &middot; ` +
+    `<span id="s-nat">0</span> \u{1F33E} agri &middot; ` +
+    `<span id="s-persist">0</span> \u{1F534} persist`;
+  animateCount(summaryEl.querySelector("#s-total"), counts.total);
+  animateCount(summaryEl.querySelector("#s-ind"), counts.industrial);
+  animateCount(summaryEl.querySelector("#s-mining"), counts.mining);
+  animateCount(summaryEl.querySelector("#s-forest"), counts.forest);
+  animateCount(summaryEl.querySelector("#s-nat"), counts.natural);
+  animateCount(summaryEl.querySelector("#s-persist"), counts.persistent);
 }
 
 function renderSitesSidebar(sitesFC) {
@@ -509,6 +583,7 @@ function renderSitesSidebar(sitesFC) {
   }
   listEl.appendChild(sectionTitle(`Thermal sites (${sites.length})`));
   for (const feature of sites) listEl.appendChild(buildSiteEntry(feature));
+  fadeInList();
   return meta;
 }
 
@@ -526,7 +601,7 @@ function setViewButtons(view) {
 }
 
 function showLayer(layer) {
-  layer.addTo(map);
+  if (!map.hasLayer(layer)) layer.addTo(map);
 }
 
 function hideLayer(layer) {
@@ -537,7 +612,6 @@ async function loadDetections(force = false) {
   currentView = "detections";
   setViewButtons("detections");
   hideLayer(siteLayer);
-  showLayer(fireLayer);
   summaryEl.textContent = "Fetching live data…";
   try {
     if (force || !cache.firesFC) {
@@ -557,13 +631,9 @@ async function loadDetections(force = false) {
     renderFlareSites(cache.flaresFC);
     renderMiningZones(cache.miningFC);
     const counts = renderDetectionsSidebar(features);
-    summaryEl.textContent =
-      `${counts.total} live hotspots · ` +
-      `${counts.industrial} 🏭 industrial · ` +
-      `${counts.mining} ⛏ mining · ` +
-      `${counts.forest} 🌲 forest · ` +
-      `${counts.natural} 🌾 agri/natural · ` +
-      `${counts.persistent} 🔴 persistent`;
+    setSummaryCounts(counts);
+    const ts = document.getElementById("live-ts");
+    if (ts) ts.textContent = `FIRMS feed · ${new Date().toUTCString().slice(17, 25)} UTC`;
   } catch (err) {
     console.error(err);
     showError(`Failed to load detections: ${err.message}`);
@@ -573,7 +643,7 @@ async function loadDetections(force = false) {
 async function loadSites(force = false) {
   currentView = "sites";
   setViewButtons("sites");
-  hideLayer(fireLayer);
+  for (const g of Object.values(fireGroups)) hideLayer(g);
   summaryEl.textContent = "Clustering persistent sources…";
   try {
     if (force || !cache.sitesFC) {
@@ -610,14 +680,18 @@ async function fetchJson(url) {
   return response.json();
 }
 
-// Category filter tabs
+// Category filter tabs: filter the sidebar AND show/hide the map layer groups.
 document.querySelectorAll(".filter-tab").forEach((btn) => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".filter-tab").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
     currentCategoryFilter = btn.dataset.category || "all";
-    if (cache.firesFC && cache.firesFC.features) {
-      renderDetectionsSidebar(cache.firesFC.features);
+    if (currentView === "detections") {
+      triggerMapSweep();
+      applyFireFilter();
+      if (cache.firesFC && cache.firesFC.features) {
+        renderDetectionsSidebar(cache.firesFC.features);
+      }
     }
   });
 });
