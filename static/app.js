@@ -103,7 +103,7 @@ const zoneLayer = L.geoJSON(null, {
     ];
     layer.bindPopup(rows.map(([k, v]) => `<b>${k}:</b> ${v}`).join("<br>"));
   },
-}).addTo(map);
+});
 
 const powerPlantLayer = L.geoJSON(null, {
   pointToLayer: (feature, latlng) =>
@@ -124,7 +124,7 @@ const powerPlantLayer = L.geoJSON(null, {
     ];
     layer.bindPopup(rows.map(([k, v]) => `<b>${k}:</b> ${v}`).join("<br>"));
   },
-}).addTo(map);
+});
 
 const flareLayer = L.geoJSON(null, {
   pointToLayer: (feature, latlng) =>
@@ -145,7 +145,7 @@ const flareLayer = L.geoJSON(null, {
     ];
     layer.bindPopup(rows.map(([k, v]) => `<b>${k}:</b> ${v}`).join("<br>"));
   },
-}).addTo(map);
+});
 
 const miningLayer = L.geoJSON(null, {
   style: {
@@ -164,7 +164,7 @@ const miningLayer = L.geoJSON(null, {
     ];
     layer.bindPopup(rows.map(([k, v]) => `<b>${k}:</b> ${v}`).join("<br>"));
   },
-}).addTo(map);
+});
 
 L.control
   .layers(
@@ -173,13 +173,8 @@ L.control
       "NASA GIBS true-color (MODIS)": gibsMODIS,
       "NASA GIBS true-color (VIIRS)": gibsVIIRS,
     },
-    {
-      "Industrial zones (OSM)": zoneLayer,
-      "Power plants (WRI)": powerPlantLayer,
-      "Gas-flare sites (VIIRS Nightfire)": flareLayer,
-      "Mining zones (OSM)": miningLayer,
-    },
-    { collapsed: false, position: "topright" },
+    null,
+    { collapsed: true, position: "topright" },
   )
   .addTo(map);
 
@@ -201,7 +196,7 @@ const sitesBtn = document.getElementById("view-sites");
 
 const cache = { firesFC: null, zonesFC: null, sitesFC: null, powerFC: null, flaresFC: null, miningFC: null };
 let currentView = "detections";
-let currentCategoryFilter = "all";
+let selectedCategories = new Set();
 
 function confidenceColor(confidence) {
   return CONFIDENCE_COLORS[confidence] || "#8892a6";
@@ -477,15 +472,38 @@ function triggerMapSweep() {
   mapEl.classList.add("map-sweep");
 }
 
-/* Show/hide whole Leaflet layer groups per the active filter tab. */
+/* Show/hide whole Leaflet layer groups per the active filter checkboxes. */
 function applyFireFilter() {
   if (currentView !== "detections") return;
   for (const [cat, group] of Object.entries(fireGroups)) {
-    if (currentCategoryFilter === "all" || cat === currentCategoryFilter) {
+    if (selectedCategories.size === 0) {
+      hideLayer(group);
+    } else if (selectedCategories.has(cat)) {
       showLayer(group);
     } else {
       hideLayer(group);
     }
+  }
+
+  // Reference layers (only shown when their corresponding category is selected)
+  if (selectedCategories.has("industrial")) {
+    showLayer(zoneLayer);
+    showLayer(powerPlantLayer);
+  } else {
+    hideLayer(zoneLayer);
+    hideLayer(powerPlantLayer);
+  }
+
+  if (selectedCategories.has("flare")) {
+    showLayer(flareLayer);
+  } else {
+    hideLayer(flareLayer);
+  }
+
+  if (selectedCategories.has("mining")) {
+    showLayer(miningLayer);
+  } else {
+    hideLayer(miningLayer);
   }
 }
 
@@ -528,16 +546,22 @@ function renderDetectionsSidebar(features) {
     for (const f of items) listEl.appendChild(buildEntry(f));
   };
 
-  if (currentCategoryFilter === "all") {
-    for (const cat of CATEGORY_ORDER) renderSection(cat);
+  if (selectedCategories.size === 0) {
+    // Show nothing when no categories selected
   } else {
-    renderSection(currentCategoryFilter);
+    for (const cat of CATEGORY_ORDER) {
+      if (selectedCategories.has(cat)) {
+        renderSection(cat);
+      }
+    }
   }
 
   if (listEl.children.length === 0) {
     const el = document.createElement("div");
     el.className = "empty";
-    el.textContent = "No detections matching this filter.";
+    el.textContent = selectedCategories.size === 0
+      ? "Select a category to view detections."
+      : "No detections matching this filter.";
     listEl.appendChild(el);
   }
 
@@ -630,6 +654,7 @@ async function loadDetections(force = false) {
     renderPowerPlants(cache.powerFC);
     renderFlareSites(cache.flaresFC);
     renderMiningZones(cache.miningFC);
+    applyFireFilter();
     const counts = renderDetectionsSidebar(features);
     setSummaryCounts(counts);
     const ts = document.getElementById("live-ts");
@@ -644,6 +669,10 @@ async function loadSites(force = false) {
   currentView = "sites";
   setViewButtons("sites");
   for (const g of Object.values(fireGroups)) hideLayer(g);
+  hideLayer(zoneLayer);
+  hideLayer(powerPlantLayer);
+  hideLayer(flareLayer);
+  hideLayer(miningLayer);
   summaryEl.textContent = "Clustering persistent sources…";
   try {
     if (force || !cache.sitesFC) {
@@ -680,12 +709,72 @@ async function fetchJson(url) {
   return response.json();
 }
 
-// Category filter tabs: filter the sidebar AND show/hide the map layer groups.
-document.querySelectorAll(".filter-tab").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".filter-tab").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    currentCategoryFilter = btn.dataset.category || "all";
+// Category filter checkboxes: filter the sidebar AND show/hide the map layer groups.
+
+// Update "All" checkbox state based on selection
+function updateFilterState() {
+  const allCheckbox = document.getElementById("filter-all");
+
+  if (selectedCategories.size === CATEGORY_ORDER.length) {
+    if (allCheckbox) {
+      allCheckbox.checked = true;
+      allCheckbox.indeterminate = false;
+    }
+  } else if (selectedCategories.size === 0) {
+    if (allCheckbox) {
+      allCheckbox.checked = false;
+      allCheckbox.indeterminate = false;
+    }
+  } else {
+    if (allCheckbox) {
+      allCheckbox.checked = false;
+      allCheckbox.indeterminate = true;
+    }
+  }
+}
+
+// Initialize filter state on page load
+updateFilterState();
+
+// Filter collapse toggle
+const filterHeader = document.getElementById("filter-header");
+const filterGroup = document.getElementById("filter-group");
+if (filterHeader && filterGroup) {
+  filterHeader.addEventListener("click", () => {
+    const isExpanded = filterHeader.getAttribute("aria-expanded") === "true";
+    if (isExpanded) {
+      filterHeader.setAttribute("aria-expanded", "false");
+      filterGroup.classList.add("collapsed");
+    } else {
+      filterHeader.setAttribute("aria-expanded", "true");
+      filterGroup.classList.remove("collapsed");
+    }
+  });
+}
+
+document.querySelectorAll("#category-filters input[type='checkbox']").forEach((checkbox) => {
+  checkbox.addEventListener("change", () => {
+    const category = checkbox.dataset.category;
+    if (category === "all") {
+      if (checkbox.checked) {
+        selectedCategories = new Set(CATEGORY_ORDER);
+        document.querySelectorAll("#category-filters input[type='checkbox']:not([data-category='all'])").forEach((cb) => {
+          cb.checked = true;
+        });
+      } else {
+        selectedCategories.clear();
+        document.querySelectorAll("#category-filters input[type='checkbox']:not([data-category='all'])").forEach((cb) => {
+          cb.checked = false;
+        });
+      }
+    } else {
+      if (checkbox.checked) {
+        selectedCategories.add(category);
+      } else {
+        selectedCategories.delete(category);
+      }
+    }
+    updateFilterState();
     if (currentView === "detections") {
       triggerMapSweep();
       applyFireFilter();

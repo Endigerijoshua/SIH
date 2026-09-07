@@ -22,7 +22,6 @@ import time
 from pathlib import Path
 
 import httpx
-from shapely.geometry import Polygon
 
 from ..config import settings
 

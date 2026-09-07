@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import httpx
+
 from app.config import settings
 from app.services import osm
 
@@ -30,7 +31,7 @@ async def main():
             raw = json.loads(cache_path.read_text(encoding="utf-8"))
             fc = raw.get("feature_collection", {})
             logger.info("Loaded existing cache with %d features", len(fc.get("features", [])))
-        except Exception as e:
+        except (json.JSONDecodeError, OSError) as e:
             logger.warning("Could not read existing cache: %s", e)
 
     semaphore = asyncio.Semaphore(6)

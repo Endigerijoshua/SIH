@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SIH26162 — Industrial Fire Detection Console</title>
+  <title>EmberMap — Real-time Fire Monitoring</title>
   <link
     rel="stylesheet"
     href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -13,46 +13,47 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
-    href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
     rel="stylesheet"
   >
   <style>
     :root {
-      /* Command-console palette (tune here) */
-      --bg-0: #070b12;
-      --bg-1: #0c1320;
-      --bg-2: #121b2c;
-      --bg-3: #182338;
-      --line: #22304a;
-      --line-soft: #1a2540;
-      --text-1: #dbe4f0;
-      --text-2: #8494ab;
-      --text-3: #5b6a82;
+      /* Refined professional palette — soft neutrals with muted sage accent */
+      --bg-0: #f8f9fa;
+      --bg-1: #ffffff;
+      --bg-2: #f1f3f5;
+      --bg-3: #e9ecef;
+      --line: #dee2e6;
+      --line-soft: #e9ecef;
+      --text-1: #212529;
+      --text-2: #495057;
+      --text-3: #6c757d;
 
-      --accent: #22d3ee;      /* electric cyan — UI chrome / active */
-      --accent-dim: #0e7490;
+      --accent: #5f8575;      /* muted sage green — calm, professional */
+      --accent-dim: #7a9d8f;
+      --accent-hover: #4a6d5f;
 
-      --ember: #e5484d;        /* deep ember red */
-      --ember-deep: #8f1f1a;
-      --amber: #f59e0b;        /* bright amber */
-      --amber-pale: #fde68a;   /* pale yellow */
+      --ember: #c14953;        /* muted ember */
+      --ember-deep: #8b3a43;
+      --amber: #d48b3a;        /* muted amber */
+      --amber-pale: #e5c084;   /* soft yellow-beige */
 
-      /* Context / infrastructure — monochrome slate family (no competing hues) */
-      --slate-light: #94a3b8;
-      --slate: #64748b;
-      --slate-deep: #475569;
-      --slate-ink: #334155;
-      --flare: var(--slate-light);   /* gas-flare catalog */
-      --mine: var(--slate-deep);     /* mining zones */
-      --forest: var(--slate);        /* vegetation zones */
-      --industrial: var(--slate-deep); /* industrial zones */
-      --persist: #b4532a;            /* persistent sources — deep copper (elevated concern) */
-      --site: var(--slate);          /* clustered thermal sites */
-      --power: var(--slate);         /* power plants */
+      /* Context colors — subtle, harmonious tones */
+      --slate-light: #8b96a3;
+      --slate: #6c7782;
+      --slate-deep: #4a5259;
+      --slate-ink: #343a40;
+      --flare: #9a7d6f;        /* warm taupe for flares */
+      --mine: #7a6f5d;         /* earthy brown for mining */
+      --forest: #6b8470;       /* soft forest green */
+      --industrial: #5d6470;   /* cool gray-blue */
+      --persist: #a85d47;      /* terracotta for persistent */
+      --site: #6c7782;         /* neutral slate */
+      --power: #6c7782;        /* neutral slate */
 
-      --font-display: "Chakra Petch", "Segoe UI", sans-serif;
-      --font-body: "Inter", "Segoe UI", sans-serif;
-      --font-mono: "IBM Plex Mono", "Consolas", monospace;
+      --font-display: "Inter", "Segoe UI", system-ui, sans-serif;
+      --font-body: "Inter", "Segoe UI", system-ui, sans-serif;
+      --font-mono: "IBM Plex Mono", "SF Mono", "Consolas", monospace;
     }
 
     html, body {
@@ -60,244 +61,363 @@
       font-family: var(--font-body);
       background: var(--bg-0); color: var(--text-1);
       overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
 
     #map {
-      position: fixed; inset: 0 auto 0 0; width: calc(100vw - 380px);
+      position: fixed; inset: 0 auto 0 0; width: calc(100vw - 400px);
       background: var(--bg-0);
     }
-    #map.map-sweep .leaflet-overlay-pane { animation: sweepIn .32s ease; }
+    #map.map-sweep .leaflet-overlay-pane { animation: sweepIn .4s ease-out; }
 
     @keyframes sweepIn {
-      from { opacity: 0; transform: translateY(3px) scale(0.995); }
+      from { opacity: 0; transform: translateY(2px); }
       to { opacity: 1; transform: none; }
     }
 
     #sidebar {
-      position: fixed; top: 0; right: 0; bottom: 0; width: 380px;
-      background:
-        repeating-linear-gradient(0deg, transparent 0 1px, rgba(34, 211, 238, 0.018) 1px 28px),
-        repeating-linear-gradient(90deg, transparent 0 1px, rgba(34, 211, 238, 0.018) 1px 28px),
-        linear-gradient(180deg, var(--bg-1), var(--bg-0));
+      position: fixed; top: 0; right: 0; bottom: 0; width: 400px;
+      background: var(--bg-1);
       border-left: 1px solid var(--line);
       box-sizing: border-box;
       display: flex; flex-direction: column;
+      box-shadow: -2px 0 12px rgba(0, 0, 0, 0.04);
     }
 
     #sidebar header {
-      padding: 14px 18px 12px; flex: 0 0 auto;
-      background: linear-gradient(180deg, rgba(34, 211, 238, 0.10), rgba(34, 211, 238, 0.02));
-      border-bottom: 1px solid var(--line-soft);
+      padding: 16px 24px 14px; flex: 0 0 auto;
+      background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
+      border-bottom: 1px solid var(--line);
     }
-    #sidebar header h1 {
-      font-family: var(--font-display);
-      font-size: 17px; letter-spacing: .06em; margin: 0 0 5px;
-      text-transform: uppercase;
-      color: var(--text-1);
-    }
-    #sidebar header h1 .accent { color: var(--accent); }
-    #sidebar header p { margin: 0; font-size: 11px; line-height: 1.45; color: var(--text-2); }
-    .live-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+    .live-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
     .live {
-      display: inline-flex; align-items: center; gap: 7px;
-      font-family: var(--font-mono); font-size: 10px; letter-spacing: .14em;
-      color: var(--accent); text-transform: uppercase;
+      display: inline-flex; align-items: center; gap: 6px;
+      font-family: var(--font-mono); font-size: 11px; letter-spacing: .05em;
+      color: var(--accent); text-transform: uppercase; font-weight: 500;
     }
     .live .dot {
-      width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
-      box-shadow: 0 0 4px var(--accent), 0 0 12px var(--accent);
-      animation: livePulse 1.8s ease-in-out infinite;
+      width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+      box-shadow: 0 0 0 2px rgba(95, 133, 117, 0.2);
+      animation: livePulse 2s ease-in-out infinite;
     }
     @keyframes livePulse {
-      0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--accent), 0 0 12px var(--accent); }
-      50% { opacity: .45; box-shadow: 0 0 2px var(--accent), 0 0 5px var(--accent); }
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: .6; transform: scale(0.85); }
     }
     .live-spacer { flex: 1; }
 
-    #controls { padding: 12px 18px 10px; border-bottom: 1px solid var(--line-soft); flex: 0 0 auto; }
+    #controls { padding: 20px 24px 18px; border-bottom: 1px solid var(--line); flex: 0 0 auto; background: var(--bg-1); }
     #controls button.primary-btn {
-      font-family: var(--font-display); letter-spacing: .05em; text-transform: uppercase;
-      background: var(--accent); color: #04121a; border: 0; border-radius: 3px;
-      padding: 7px 12px; cursor: pointer; font-size: 12px; font-weight: 600;
-      box-shadow: 0 0 14px rgba(34, 211, 238, 0.25);
-      transition: transform .12s ease, box-shadow .12s ease;
+      font-family: var(--font-display); font-weight: 500;
+      background: var(--accent); color: #ffffff; border: 0; border-radius: 6px;
+      padding: 10px 16px; cursor: pointer; font-size: 13px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      transition: all .2s ease;
     }
-    #controls button.primary-btn:hover { transform: translateY(-1px); box-shadow: 0 0 20px rgba(34, 211, 238, 0.4); }
-    #view-toggle { margin-bottom: 10px; display: flex; gap: 6px; }
+    #controls button.primary-btn:hover { background: var(--accent-hover); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15); }
+    #view-toggle { margin-bottom: 20px; display: flex; gap: 8px; }
     #view-toggle button {
-      font-family: var(--font-display); letter-spacing: .04em; text-transform: uppercase;
-      flex: 1; background: var(--bg-2); color: var(--text-2); border: 1px solid var(--line);
-      border-radius: 3px; padding: 7px 8px; cursor: pointer; font-size: 11px; font-weight: 600;
+      font-family: var(--font-display); font-weight: 500;
+      flex: 1; background: var(--bg-0); color: var(--text-2); border: 1px solid var(--line);
+      border-radius: 6px; padding: 9px 12px; cursor: pointer; font-size: 13px;
+      transition: all .2s ease;
+    }
+    #view-toggle button:hover { color: var(--text-1); border-color: var(--accent-dim); background: var(--bg-2); }
+    #view-toggle button.active { background: var(--accent); color: #ffffff; border-color: var(--accent); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); }
+
+
+    #category-filters { margin: 0 0 16px; }
+
+    .filter-section-header {
+      display: flex; align-items: center; justify-content: space-between;
+      font-family: var(--font-display); font-weight: 500;
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--text-3); margin: 0 0 10px;
+      cursor: pointer; user-select: none;
+      padding: 4px 0;
+      transition: color .2s ease;
+    }
+    .filter-section-header:hover {
+      color: var(--text-2);
+    }
+    .filter-toggle-arrow {
+      font-size: 10px; color: var(--text-3);
+      transition: transform .2s ease;
+    }
+    .filter-section-header[aria-expanded="false"] .filter-toggle-arrow {
+      transform: rotate(-90deg);
+    }
+
+    .filter-group {
+      display: flex; flex-direction: column; gap: 8px;
+      max-height: 500px;
+      overflow: hidden;
+      transition: max-height .3s ease, opacity .3s ease;
+    }
+    .filter-group.collapsed {
+      max-height: 0;
+      opacity: 0;
+    }
+
+    .filter-checkbox {
+      display: flex; align-items: center; gap: 8px;
+      cursor: pointer; padding: 0;
       transition: all .15s ease;
     }
-    #view-toggle button:hover { color: var(--text-1); border-color: var(--accent-dim); }
-    #view-toggle button.active { background: var(--bg-3); color: var(--accent); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+    .filter-checkbox:hover .custom-checkbox {
+      border-color: var(--accent);
+    }
 
-    #category-filters { margin: 6px 0 10px; display: flex; flex-wrap: wrap; gap: 5px; }
+    .custom-checkbox {
+      position: relative;
+      width: 16px; height: 16px; min-width: 16px;
+      border: 1px solid var(--line);
+      border-radius: 3px;
+      background: var(--bg-1);
+      transition: all .2s ease;
+    }
+    .filter-checkbox input[type="checkbox"] {
+      position: absolute; opacity: 0; width: 0; height: 0;
+    }
+    .filter-checkbox input[type="checkbox"]:checked + .custom-checkbox {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .filter-checkbox input[type="checkbox"]:checked + .custom-checkbox::after {
+      content: '';
+      position: absolute; left: 5px; top: 2px;
+      width: 4px; height: 8px;
+      border: solid #ffffff;
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg);
+    }
+
+    .checkbox-label {
+      display: flex; align-items: center; justify-content: space-between;
+      flex: 1; gap: 8px;
+      font-family: var(--font-body); font-size: 13px; font-weight: 400;
+      color: var(--text-2);
+      transition: color .15s ease;
+    }
+    .filter-checkbox:hover .checkbox-label {
+      color: var(--text-1);
+    }
+    .filter-checkbox input[type="checkbox"]:checked ~ .checkbox-label {
+      color: var(--text-1);
+      font-weight: 500;
+    }
+
+    .checkbox-label-text {
+      display: flex; align-items: center; gap: 7px;
+    }
+    .checkbox-label-text .emoji {
+      font-size: 14px; line-height: 1; opacity: 0.85;
+    }
+
+    .badge-count {
+      font-family: var(--font-mono); font-weight: 500; font-size: 11px;
+      color: var(--text-3);
+      background: var(--bg-2);
+      border-radius: 4px; padding: 2px 6px;
+      min-width: 24px; text-align: center;
+      transition: all .15s ease;
+    }
+    .filter-checkbox input[type="checkbox"]:checked ~ .checkbox-label .badge-count {
+      background: rgba(95, 133, 117, 0.15);
+      color: var(--accent);
+    }
     .filter-tab {
       display: inline-flex; align-items: center; gap: 5px;
-      font-family: var(--font-mono); font-size: 10.5px;
-      background: var(--bg-2); color: var(--text-2); border: 1px solid var(--line);
-      border-radius: 14px; padding: 4px 9px; cursor: pointer;
-      transition: all .18s ease;
+      font-family: var(--font-body); font-size: 12px; font-weight: 500;
+      background: var(--bg-0); color: var(--text-2); border: 1px solid var(--line);
+      border-radius: 16px; padding: 6px 12px; cursor: pointer;
+      transition: all .2s ease;
     }
-    .filter-tab:hover { color: var(--text-1); border-color: var(--accent-dim); transform: translateY(-1px); }
+    .filter-tab:hover { color: var(--text-1); border-color: var(--accent-dim); background: var(--bg-2); }
     .filter-tab.active {
-      color: #04121a; background: var(--accent); border-color: var(--accent);
-      box-shadow: 0 0 12px rgba(34, 211, 238, 0.35);
+      color: #ffffff; background: var(--accent); border-color: var(--accent);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
     }
     .filter-tab .badge-count {
-      font-family: var(--font-mono); font-weight: 600;
-      background: rgba(255, 255, 255, 0.10); border-radius: 8px; padding: 0 5px;
+      font-family: var(--font-mono); font-weight: 500; font-size: 11px;
+      background: rgba(0, 0, 0, 0.08); border-radius: 10px; padding: 1px 6px;
     }
-    .filter-tab.active .badge-count { background: rgba(4, 18, 26, 0.18); }
+    .filter-tab.active .badge-count { background: rgba(255, 255, 255, 0.25); color: #ffffff; }
     .btn-reload {
-      font-family: var(--font-mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
-      background: transparent; color: var(--text-2); border: 1px solid var(--line);
-      border-radius: 3px; padding: 5px 10px; cursor: pointer; transition: all .15s ease;
+      font-family: var(--font-body); font-size: 12px; font-weight: 500;
+      background: var(--bg-0); color: var(--text-2); border: 1px solid var(--line);
+      border-radius: 6px; padding: 7px 14px; cursor: pointer; transition: all .2s ease;
     }
-    .btn-reload:hover { color: var(--accent); border-color: var(--accent); }
+    .btn-reload:hover { color: var(--accent-hover); border-color: var(--accent); background: var(--bg-2); }
 
     #summary {
-      margin: 8px 0 4px; font-family: var(--font-mono); font-size: 11.5px;
-      color: var(--text-2); line-height: 1.5;
+      margin: 10px 0 6px; font-family: var(--font-body); font-size: 13px;
+      color: var(--text-2); line-height: 1.6;
     }
     #summary .big {
-      font-family: var(--font-display); font-weight: 700; font-size: 22px;
-      color: var(--accent); margin-right: 4px;
+      font-family: var(--font-display); font-weight: 600; font-size: 24px;
+      color: var(--accent); margin-right: 6px;
     }
-    #legend { margin-top: 6px; font-family: var(--font-mono); font-size: 10px; color: var(--text-3); display: flex; flex-wrap: wrap; gap: 7px 12px; }
+    #legend { margin-top: 10px; font-family: var(--font-mono); font-size: 11px; color: var(--text-3); display: flex; flex-wrap: wrap; gap: 8px 14px; }
     #legend .swatch {
-      display: inline-block; width: 9px; height: 9px; border-radius: 50%;
-      margin-right: 4px; vertical-align: middle;
+      display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+      margin-right: 5px; vertical-align: middle;
     }
     #legend .ring {
       display: inline-block; width: 10px; height: 10px;
       border: 2px dashed var(--persist); border-radius: 50%; box-sizing: border-box;
-      margin-right: 4px; vertical-align: middle; animation: livePulse 2s ease-in-out infinite;
+      margin-right: 5px; vertical-align: middle;
     }
 
     #list {
-      flex: 1 1 auto; overflow-y: auto; padding: 10px 0 18px;
+      flex: 1 1 auto; overflow-y: auto; padding: 12px 0 20px;
       scrollbar-width: thin; scrollbar-color: var(--line) transparent;
     }
-    #list::-webkit-scrollbar { width: 8px; }
-    #list::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+    #list::-webkit-scrollbar { width: 6px; }
+    #list::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+    #list::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
 
     .section-title {
-      font-family: var(--font-display); letter-spacing: .08em; text-transform: uppercase;
-      font-size: 11px; font-weight: 600; color: var(--text-2);
-      padding: 14px 18px 6px;
+      font-family: var(--font-display); font-weight: 600;
+      font-size: 12px; color: var(--text-2);
+      padding: 16px 24px 8px;
+      text-transform: uppercase; letter-spacing: 0.05em;
     }
-    .section-title .n { font-family: var(--font-mono); color: var(--accent); }
+    .section-title .n { font-family: var(--font-mono); color: var(--accent); font-weight: 500; }
 
     .entry {
       --card-accent: var(--text-3);
-      --card-glow: rgba(132, 148, 171, 0.12);
-      margin: 0 14px 9px; padding: 11px 13px 11px 15px;
-      background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
-      border: 1px solid var(--line-soft);
+      margin: 0 20px 10px; padding: 16px 18px;
+      background: var(--bg-1);
+      border: 1px solid var(--line);
       border-left: 3px solid var(--card-accent);
-      border-radius: 5px;
-      cursor: pointer; font-size: 12px;
-      transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease;
-      box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+      border-radius: 8px;
+      cursor: pointer; font-size: 13px;
+      transition: all .2s ease;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
     }
     .entry:hover {
       transform: translateY(-1px);
-      border-color: var(--card-accent);
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35), 0 0 16px var(--card-glow);
+      border-left-width: 4px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
     }
-.entry.entry-persistent   { --card-accent: var(--persist);--card-glow: rgba(180, 83, 42, 0.20); }
-    .entry.entry-flare        { --card-accent: var(--flare);   --card-glow: rgba(148, 163, 184, 0.14); }
-    .entry.entry-industrial   { --card-accent: var(--industrial);--card-glow: rgba(71, 85, 105, 0.20); }
-    .entry.entry-mining       { --card-accent: var(--mine);    --card-glow: rgba(100, 116, 139, 0.16); }
-    .entry.entry-forest       { --card-accent: var(--forest);  --card-glow: rgba(100, 116, 139, 0.16); }
-    .entry.entry-other_natural{ --card-accent: var(--flare);   --card-glow: rgba(148, 163, 184, 0.12); }
-    .entry .head { display: flex; justify-content: space-between; font-weight: 600; }
-    .entry .dist { font-family: var(--font-mono); color: var(--accent); font-size: 11px; }
-    .entry dl { margin: 7px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; }
-    .entry dt { color: var(--text-3); font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
-    .entry dd { margin: 0; font-family: var(--font-mono); font-size: 11px; color: var(--text-2); }
+
+    .entry.entry-persistent   { --card-accent: var(--persist); }
+    .entry.entry-flare        { --card-accent: var(--flare); }
+    .entry.entry-industrial   { --card-accent: var(--industrial); }
+    .entry.entry-mining       { --card-accent: var(--mine); }
+    .entry.entry-forest       { --card-accent: var(--forest); }
+    .entry.entry-other_natural{ --card-accent: var(--flare); }
+    .entry .head { display: flex; justify-content: space-between; font-weight: 500; }
+    .entry .dist { font-family: var(--font-mono); color: var(--accent); font-size: 12px; }
+    .entry dl { margin: 10px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; }
+    .entry dt { color: var(--text-3); font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+    .entry dd { margin: 0; font-family: var(--font-mono); font-size: 12px; color: var(--text-2); }
 
     .verdict {
-      display: flex; align-items: center; gap: 9px;
-      font-family: var(--font-display); font-size: 14.5px; font-weight: 600; line-height: 1.15;
+      display: flex; align-items: center; gap: 10px;
+      font-family: var(--font-display); font-size: 15px; font-weight: 500; line-height: 1.3;
     }
     .verdict .badge {
-      --badge-accent: var(--text-3); --badge-glow: transparent;
-      flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%;
+      --badge-accent: var(--text-3);
+      flex: 0 0 auto; width: 32px; height: 32px; border-radius: 50%;
       display: inline-flex; align-items: center; justify-content: center;
-      font-size: 13px;
-      background: radial-gradient(circle at 30% 28%, var(--bg-3), var(--bg-1) 70%);
-      border: 1px solid var(--badge-accent);
-      box-shadow: 0 0 10px var(--badge-glow), inset 0 0 6px rgba(0, 0, 0, 0.4);
+      font-size: 16px;
+      background: var(--bg-2);
+      border: 2px solid var(--badge-accent);
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06);
     }
-.verdict .badge.badge-persistent    { --badge-accent: var(--persist);    --badge-glow: rgba(180, 83, 42, .32); }
-    .verdict .badge.badge-flare         { --badge-accent: var(--flare);      --badge-glow: rgba(148, 163, 184, .30); }
-    .verdict .badge.badge-industrial    { --badge-accent: var(--industrial); --badge-glow: rgba(71, 85, 105, .30); }
-    .verdict .badge.badge-mining        { --badge-accent: var(--mine);       --badge-glow: rgba(100, 116, 139, .28); }
-    .verdict .badge.badge-forest        { --badge-accent: var(--forest);     --badge-glow: rgba(100, 116, 139, .28); }
-    .verdict .badge.badge-other_natural { --badge-accent: var(--flare);      --badge-glow: rgba(148, 163, 184, .26); }
+    .verdict .badge.badge-persistent    { --badge-accent: var(--persist); }
+    .verdict .badge.badge-flare         { --badge-accent: var(--flare); }
+    .verdict .badge.badge-industrial    { --badge-accent: var(--industrial); }
+    .verdict .badge.badge-mining        { --badge-accent: var(--mine); }
+    .verdict .badge.badge-forest        { --badge-accent: var(--forest); }
+    .verdict .badge.badge-other_natural { --badge-accent: var(--flare); }
 
-    .detail { margin: 4px 0 0; color: var(--text-1); font-weight: 600; font-size: 12px; }
-    .persist { margin: 5px 0 0; color: var(--persist); font-weight: 600; font-size: 11.5px; }
-    .reason { margin: 4px 0 0; font-size: 11px; color: var(--text-3); font-style: italic; }
-    details { margin-top: 7px; }
-    details > summary { cursor: pointer; font-family: var(--font-mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
-    details[open] > summary { margin-bottom: 5px; }
-    .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-2); }
+    .detail { margin: 6px 0 0; color: var(--text-1); font-weight: 500; font-size: 13px; }
+    .persist { margin: 6px 0 0; color: var(--persist); font-weight: 500; font-size: 12px; }
+    .reason { margin: 6px 0 0; font-size: 12px; color: var(--text-3); font-style: italic; line-height: 1.4; }
+    details { margin-top: 10px; }
+    details > summary { cursor: pointer; font-family: var(--font-body); font-size: 12px; font-weight: 500; color: var(--accent); }
+    details > summary:hover { color: var(--accent-hover); }
+    details[open] > summary { margin-bottom: 8px; }
+    .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; font-family: var(--font-mono); font-size: 11px; color: var(--text-2); }
     .kv b { color: var(--text-3); font-weight: 500; }
-    .leaflet-popup .fb { min-width: 230px; }
+    .leaflet-popup .fb { min-width: 240px; }
     .leaflet-popup-content-wrapper {
-      background: var(--bg-2); color: var(--text-1); border: 1px solid var(--line);
-      border-radius: 6px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+      background: var(--bg-1); color: var(--text-1); border: 1px solid var(--line);
+      border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
     }
-    .leaflet-popup-tip { background: var(--bg-2); border: 1px solid var(--line); }
+    .leaflet-popup-tip { background: var(--bg-1); border: 1px solid var(--line); }
     .leaflet-popup-content { font-family: var(--font-body); }
     .leaflet-container a.leaflet-popup-close-button { color: var(--text-2); }
 
-    .empty { padding: 24px 16px; color: var(--text-3); font-size: 12px; font-family: var(--font-mono); text-align: center; }
+    .empty { padding: 32px 20px; color: var(--text-3); font-size: 13px; text-align: center; line-height: 1.5; }
 
-    /* Sidebar list fade/scale when the filter changes */
-    .list-fade .entry { animation: listIn .26s ease backwards; }
-    .list-fade .entry:nth-child(2n) { animation-delay: .025s; }
-    .list-fade .entry:nth-child(3n) { animation-delay: .05s; }
+    /* Sidebar list fade when the filter changes */
+    .list-fade .entry { animation: listIn .3s ease backwards; }
+    .list-fade .entry:nth-child(2n) { animation-delay: .03s; }
+    .list-fade .entry:nth-child(3n) { animation-delay: .06s; }
     @keyframes listIn {
-      from { opacity: 0; transform: translateX(8px) scale(0.985); }
+      from { opacity: 0; transform: translateY(4px); }
       to { opacity: 1; transform: none; }
     }
 
-    /* Persistent thermal markers: marching "actively watched" pulse */
+    /* Persistent thermal markers: subtle pulse */
     @keyframes persistPulse {
-      0%, 100% { stroke-opacity: .95; }
-      50% { stroke-opacity: .38; }
+      0%, 100% { stroke-opacity: .9; }
+      50% { stroke-opacity: .5; }
     }
-    @keyframes persistAnts { to { stroke-dashoffset: -32; } }
+    @keyframes persistAnts { to { stroke-dashoffset: -16; } }
     #map path.marker-persistent {
-      animation: persistPulse 2.4s ease-in-out infinite, persistAnts 1.4s linear infinite;
+      animation: persistPulse 2.5s ease-in-out infinite, persistAnts 1.8s linear infinite;
     }
 
     /* Sidebar-hover highlight on the linked map marker */
     @keyframes markerBounce {
       0%, 100% { transform: none; }
-      50% { transform: scale(1.35); }
+      50% { transform: scale(1.3); }
     }
     #map path.marker-hover {
-      animation: markerBounce .45s ease 1;
+      animation: markerBounce .4s ease 1;
       stroke-width: 3;
-      filter: drop-shadow(0 0 5px var(--accent));
+      filter: drop-shadow(0 0 4px var(--accent));
     }
 
     .leaflet-control-layers {
-      background: var(--bg-2) !important; color: var(--text-1) !important;
-      border: 1px solid var(--line) !important; border-radius: 4px !important;
-      font-family: var(--font-mono); font-size: 11px;
+      background: var(--bg-1) !important; color: var(--text-1) !important;
+      border: 1px solid var(--line) !important; border-radius: 8px !important;
+      font-family: var(--font-body); font-size: 12px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2) !important;
+      transition: all .2s ease;
     }
-    .leaflet-control-layers label { color: var(--text-1); }
-    .leaflet-control-layers-expanded { padding: 8px 10px !important; }
-    .leaflet-bar a { background: var(--bg-2); color: var(--text-1); border-bottom: 1px solid var(--line); }
-    .leaflet-bar a:hover { background: var(--bg-3); }
+    .leaflet-control-layers-toggle {
+      width: 36px !important;
+      height: 36px !important;
+      background-size: 20px 20px !important;
+      border-radius: 8px !important;
+    }
+    .leaflet-control-layers-toggle:hover {
+      background-color: var(--bg-2) !important;
+    }
+    .leaflet-control-layers-expanded {
+      padding: 12px 14px !important;
+      min-width: 220px;
+    }
+    .leaflet-control-layers-base label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+      cursor: pointer;
+      color: var(--text-1);
+    }
+    .leaflet-control-layers-base label:last-child {
+      margin-bottom: 0;
+    }
+    .leaflet-bar a { background: var(--bg-1); color: var(--text-1); border-bottom: 1px solid var(--line); }
+    .leaflet-bar a:hover { background: var(--bg-2); }
   </style>
 </head>
 <body>
@@ -305,8 +425,6 @@
 
   <aside id="sidebar">
     <header>
-      <h1>SIH26162 <span class="accent">·</span> Industrial Fire Monitor</h1>
-      <p>Live NASA FIRMS hotspots &times; OSM industrial / mining zones + WRI power plants · VIIRS Nightfire gas-flare evidence</p>
       <div class="live-row">
         <span class="live"><span class="dot"></span>Live</span>
         <span class="live-spacer"></span>
@@ -318,14 +436,90 @@
         <button id="view-detections" class="active">Detections</button>
         <button id="view-sites">Clustered sites</button>
       </div>
-      <div id="category-filters" role="group" aria-label="Fire category filter">
-        <button class="filter-tab active" data-category="all">All <span class="badge-count" id="count-all">0</span></button>
-        <button class="filter-tab" data-category="industrial"><span>🏭</span>Ind <span class="badge-count" id="count-ind">0</span></button>
-        <button class="filter-tab" data-category="mining"><span>⛏</span>Mining <span class="badge-count" id="count-mining">0</span></button>
-        <button class="filter-tab" data-category="forest"><span>🌲</span>Forest <span class="badge-count" id="count-forest">0</span></button>
-        <button class="filter-tab" data-category="other_natural"><span>🌾</span>Agri <span class="badge-count" id="count-nat">0</span></button>
-        <button class="filter-tab" data-category="flare"><span>🔥</span>Flare <span class="badge-count" id="count-flare">0</span></button>
-        <button class="filter-tab" data-category="persistent"><span>🔴</span>Persistent <span class="badge-count" id="count-persist">0</span></button>
+      <div id="category-filters">
+        <div class="filter-section-header" id="filter-header" aria-expanded="true">
+          <span>Filter by Category</span>
+          <span class="filter-toggle-arrow">▼</span>
+        </div>
+        <div class="filter-group" id="filter-group">
+          <label class="filter-checkbox">
+            <input type="checkbox" data-category="all" id="filter-all">
+            <span class="custom-checkbox"></span>
+            <span class="checkbox-label">
+              <span class="checkbox-label-text">
+                <span class="emoji">🌐</span>
+                <span>All Detections</span>
+              </span>
+              <span class="badge-count" id="count-all">0</span>
+            </span>
+          </label>
+          <label class="filter-checkbox">
+            <input type="checkbox" data-category="industrial">
+            <span class="custom-checkbox"></span>
+            <span class="checkbox-label">
+              <span class="checkbox-label-text">
+                <span class="emoji">🏭</span>
+                <span>Industry</span>
+              </span>
+              <span class="badge-count" id="count-ind">0</span>
+            </span>
+          </label>
+          <label class="filter-checkbox">
+            <input type="checkbox" data-category="flare">
+            <span class="custom-checkbox"></span>
+            <span class="checkbox-label">
+              <span class="checkbox-label-text">
+                <span class="emoji">🔥</span>
+                <span>Flare</span>
+              </span>
+              <span class="badge-count" id="count-flare">0</span>
+            </span>
+          </label>
+          <label class="filter-checkbox">
+            <input type="checkbox" data-category="mining">
+            <span class="custom-checkbox"></span>
+            <span class="checkbox-label">
+              <span class="checkbox-label-text">
+                <span class="emoji">⛏</span>
+                <span>Mining</span>
+              </span>
+              <span class="badge-count" id="count-mining">0</span>
+            </span>
+          </label>
+          <label class="filter-checkbox">
+            <input type="checkbox" data-category="forest">
+            <span class="custom-checkbox"></span>
+            <span class="checkbox-label">
+              <span class="checkbox-label-text">
+                <span class="emoji">🌲</span>
+                <span>Forest</span>
+              </span>
+              <span class="badge-count" id="count-forest">0</span>
+            </span>
+          </label>
+          <label class="filter-checkbox">
+            <input type="checkbox" data-category="other_natural">
+            <span class="custom-checkbox"></span>
+            <span class="checkbox-label">
+              <span class="checkbox-label-text">
+                <span class="emoji">🌾</span>
+                <span>Agriculture</span>
+              </span>
+              <span class="badge-count" id="count-nat">0</span>
+            </span>
+          </label>
+          <label class="filter-checkbox">
+            <input type="checkbox" data-category="persistent">
+            <span class="custom-checkbox"></span>
+            <span class="checkbox-label">
+              <span class="checkbox-label-text">
+                <span class="emoji">🔴</span>
+                <span>Persistent Fire</span>
+              </span>
+              <span class="badge-count" id="count-persist">0</span>
+            </span>
+          </label>
+        </div>
       </div>
       <button id="reload" class="btn-reload">Refresh data</button>
       <div id="summary">Loading…</div>
