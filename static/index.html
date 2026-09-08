@@ -355,6 +355,38 @@
 
     .empty { padding: 32px 20px; color: var(--text-3); font-size: 13px; text-align: center; line-height: 1.5; }
 
+    /* ---- Skeleton loaders (initial fetch) ---- */
+    .skeleton {
+      position: relative;
+      overflow: hidden;
+      background: var(--bg-3);
+      border-radius: 4px;
+    }
+    .skeleton::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      transform: translateX(-100%);
+      background: linear-gradient(90deg, transparent, var(--bg-0), transparent);
+      animation: skeletonShimmer 1.5s ease-in-out infinite;
+    }
+    @keyframes skeletonShimmer {
+      100% { transform: translateX(100%); }
+    }
+    .badge-count.skeleton { min-width: 28px; color: transparent; }
+    .entry-skeleton {
+      --card-accent: var(--line-soft);
+      cursor: default;
+    }
+    .entry-skeleton:hover { transform: none; box-shadow: none; border-left-width: 3px; }
+    .entry-skeleton .s-badge {
+      width: 32px; height: 32px; border-radius: 50%; flex: 0 0 auto;
+    }
+    .entry-skeleton .s-line { height: 12px; }
+    .entry-skeleton .s-verdict { height: 14px; }
+    .entry-skeleton .s-reason { height: 10px; }
+    .entry-skeleton > .skeleton { margin-top: 8px; }
+
     /* Sidebar list fade when the filter changes */
     .list-fade .entry { animation: listIn .3s ease backwards; }
     .list-fade .entry:nth-child(2n) { animation-delay: .03s; }
@@ -450,7 +482,7 @@
                 <span class="emoji">🌐</span>
                 <span>All Detections</span>
               </span>
-              <span class="badge-count" id="count-all">0</span>
+              <span class="badge-count skeleton" id="count-all"></span>
             </span>
           </label>
           <label class="filter-checkbox">
@@ -461,7 +493,7 @@
                 <span class="emoji">🏭</span>
                 <span>Industry</span>
               </span>
-              <span class="badge-count" id="count-ind">0</span>
+              <span class="badge-count skeleton" id="count-ind"></span>
             </span>
           </label>
           <label class="filter-checkbox">
@@ -472,7 +504,7 @@
                 <span class="emoji">🔥</span>
                 <span>Flare</span>
               </span>
-              <span class="badge-count" id="count-flare">0</span>
+              <span class="badge-count skeleton" id="count-flare"></span>
             </span>
           </label>
           <label class="filter-checkbox">
@@ -483,7 +515,7 @@
                 <span class="emoji">⛏</span>
                 <span>Mining</span>
               </span>
-              <span class="badge-count" id="count-mining">0</span>
+              <span class="badge-count skeleton" id="count-mining"></span>
             </span>
           </label>
           <label class="filter-checkbox">
@@ -494,7 +526,7 @@
                 <span class="emoji">🌲</span>
                 <span>Forest</span>
               </span>
-              <span class="badge-count" id="count-forest">0</span>
+              <span class="badge-count skeleton" id="count-forest"></span>
             </span>
           </label>
           <label class="filter-checkbox">
@@ -505,7 +537,7 @@
                 <span class="emoji">🌾</span>
                 <span>Agriculture</span>
               </span>
-              <span class="badge-count" id="count-nat">0</span>
+              <span class="badge-count skeleton" id="count-nat"></span>
             </span>
           </label>
           <label class="filter-checkbox">
@@ -516,7 +548,7 @@
                 <span class="emoji">🔴</span>
                 <span>Persistent Fire</span>
               </span>
-              <span class="badge-count" id="count-persist">0</span>
+              <span class="badge-count skeleton" id="count-persist"></span>
             </span>
           </label>
         </div>
@@ -534,7 +566,50 @@
         <span><span class="swatch" style="background:#64748b"></span>Plant</span>
       </div>
     </div>
-    <div id="list"><div class="empty">Loading fire detections…</div></div>
+    <div id="list">
+      <div class="entry entry-skeleton">
+        <div class="verdict">
+          <div class="skeleton s-badge"></div>
+          <div class="skeleton s-line s-verdict" style="width:46%"></div>
+        </div>
+        <div class="skeleton s-line" style="width:92%"></div>
+        <div class="skeleton s-line s-reason" style="width:64%"></div>
+      </div>
+      <div class="entry entry-skeleton">
+        <div class="verdict">
+          <div class="skeleton s-badge"></div>
+          <div class="skeleton s-line s-verdict" style="width:38%"></div>
+        </div>
+        <div class="skeleton s-line" style="width:84%"></div>
+        <div class="skeleton s-line" style="width:72%"></div>
+        <div class="skeleton s-line s-reason" style="width:46%"></div>
+      </div>
+      <div class="entry entry-skeleton">
+        <div class="verdict">
+          <div class="skeleton s-badge"></div>
+          <div class="skeleton s-line s-verdict" style="width:52%"></div>
+        </div>
+        <div class="skeleton s-line" style="width:88%"></div>
+        <div class="skeleton s-line s-reason" style="width:58%"></div>
+      </div>
+      <div class="entry entry-skeleton">
+        <div class="verdict">
+          <div class="skeleton s-badge"></div>
+          <div class="skeleton s-line s-verdict" style="width:44%"></div>
+        </div>
+        <div class="skeleton s-line" style="width:90%"></div>
+        <div class="skeleton s-line" style="width:68%"></div>
+        <div class="skeleton s-line s-reason" style="width:42%"></div>
+      </div>
+      <div class="entry entry-skeleton">
+        <div class="verdict">
+          <div class="skeleton s-badge"></div>
+          <div class="skeleton s-line s-verdict" style="width:40%"></div>
+        </div>
+        <div class="skeleton s-line" style="width:86%"></div>
+        <div class="skeleton s-line s-reason" style="width:74%"></div>
+      </div>
+    </div>
   </aside>
 
   <script

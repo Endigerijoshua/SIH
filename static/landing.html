@@ -1,0 +1,799 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EmberMap — Real-time AI Fire Detection Across India</title>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+    rel="stylesheet"
+  >
+  <style>
+    :root {
+      /* Mirror of the dashboard palette — light neutrals + muted sage accent. */
+      --bg-0: #f8f9fa;
+      --bg-1: #ffffff;
+      --bg-2: #f1f3f5;
+      --bg-3: #e9ecef;
+      --line: #dee2e6;
+      --line-soft: #e9ecef;
+      --text-1: #212529;
+      --text-2: #495057;
+      --text-3: #6c757d;
+
+      --accent: #5f8575;
+      --accent-dim: #7a9d8f;
+      --accent-hover: #4a6d5f;
+
+      --ember: #c14953;
+      --ember-deep: #8b3a43;
+      --amber: #d48b3a;
+      --amber-pale: #e5c084;
+
+      --severe: #e5484d;
+      --nominal: #f59e0b;
+      --low: #fde68a;
+
+      --fire-gradient: linear-gradient(135deg, #d2242b 0%, #e5484d 35%, #f59e0b 72%, #fbbf24 100%);
+
+      --font-display: "Inter", "Segoe UI", system-ui, sans-serif;
+      --font-body: "Inter", "Segoe UI", system-ui, sans-serif;
+      --font-mono: "IBM Plex Mono", "SF Mono", "Consolas", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      overflow: hidden;
+      font-family: var(--font-body);
+      color: var(--text-1);
+      background: var(--bg-0);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    body.modal-open { overflow: hidden; }
+
+    /* Single-viewport hero: all content visible by default. */
+    #hero {
+      position: relative;
+      height: 100vh;
+      height: 100dvh;
+      overflow: hidden;
+      background: var(--bg-3);
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* World→India map, purely a background layer. */
+    #zoom-map {
+      position: absolute; inset: 0;
+      z-index: 0;
+      opacity: 1;
+      transition: opacity 1.6s ease;
+    }
+    #zoom-map.landed { opacity: 0.16; }
+
+    /* Light scrim so text stays readable over the map. */
+    .scrim {
+      position: absolute; inset: 0;
+      z-index: 1;
+      background: linear-gradient(
+        180deg,
+        rgba(248, 249, 250, 0.55) 0%,
+        rgba(248, 249, 250, 0.28) 45%,
+        rgba(248, 249, 250, 0.6) 100%
+      );
+    }
+
+    /* The description is a short sentence displayed directly under the tagline. */
+    #hero-content {
+      position: relative;
+      z-index: 2;
+      flex: 1 1 auto;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center;
+      padding: 24px 20px 90px;
+      min-height: 0;
+    }
+
+    .wordmark {
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: clamp(44px, 7vw, 88px);
+      letter-spacing: -0.02em;
+      color: var(--text-1);
+      line-height: 1;
+      text-shadow: 0 2px 18px rgba(255, 255, 255, 0.85);
+    }
+    .wordmark .flame {
+      background: var(--fire-gradient);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .tagline {
+      margin-top: 14px;
+      max-width: 640px;
+      font-size: clamp(14px, 1.8vw, 18px);
+      color: var(--text-1);
+      line-height: 1.45;
+      font-weight: 600;
+      text-shadow: 0 1px 10px rgba(255, 255, 255, 0.9);
+    }
+    .tagline strong { color: var(--ember-deep); font-weight: 700; }
+
+    .description {
+      margin-top: 12px;
+      max-width: 640px;
+      font-size: clamp(12.5px, 1.35vw, 15px);
+      color: var(--text-2);
+      line-height: 1.5;
+    }
+
+    /* Primary action — fire gradient fill, the most prominent element. */
+    .cta {
+      margin-top: 26px;
+      display: inline-flex; align-items: center; gap: 10px;
+      font-family: var(--font-display);
+      font-weight: 700; font-size: clamp(16px, 1.8vw, 20px);
+      color: #ffffff;
+      background: var(--fire-gradient);
+      border: 0; border-radius: 12px;
+      padding: 17px 40px; cursor: pointer;
+      text-decoration: none;
+      box-shadow: 0 8px 28px rgba(197, 48, 53, 0.45), 0 4px 12px rgba(245, 158, 11, 0.35);
+      animation: ctaPulse 2.6s ease-in-out infinite;
+      transition: transform .2s ease, box-shadow .2s ease;
+    }
+    .cta:hover {
+      transform: translateY(-2px) scale(1.03);
+      box-shadow: 0 16px 44px rgba(197, 48, 53, 0.6), 0 6px 22px rgba(245, 158, 11, 0.5);
+    }
+    .cta .arrow { font-family: var(--font-mono); font-size: 1.1em; }
+    @keyframes ctaPulse {
+      0%, 100% { box-shadow: 0 8px 28px rgba(197, 48, 53, 0.45), 0 4px 12px rgba(245, 158, 11, 0.35); }
+      50% { box-shadow: 0 13px 46px rgba(197, 48, 53, 0.6), 0 6px 22px rgba(245, 158, 11, 0.52); }
+    }
+
+    /* Live badge (top-left), dot menu (top-right). */
+    .hero-meta {
+      position: absolute; top: 16px; left: 20px;
+      z-index: 3;
+      font-family: var(--font-mono); font-size: 11px; color: var(--text-3);
+      letter-spacing: .06em;
+      display: flex; align-items: center; gap: 8px;
+      background: rgba(255, 255, 255, 0.7);
+      padding: 6px 12px; border-radius: 999px;
+      border: 1px solid var(--line);
+    }
+    .live-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--severe);
+      box-shadow: 0 0 0 3px rgba(229, 72, 77, 0.25);
+      animation: livePulse 2s ease-in-out infinite;
+    }
+    @keyframes livePulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: .55; transform: scale(0.85); }
+    }
+
+    .menu-wrap { position: absolute; top: 12px; right: 16px; z-index: 3; }
+    .menu-btn {
+      width: 40px; height: 40px;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-family: var(--font-body); font-size: 22px; font-weight: 600;
+      color: var(--text-2);
+      background: rgba(255, 255, 255, 0.75);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all .15s ease;
+    }
+    .menu-btn:hover { color: var(--text-1); background: var(--bg-1); border-color: var(--accent-dim); }
+    .menu-btn[aria-expanded="true"] { color: var(--text-1); background: var(--bg-1); border-color: var(--accent); }
+
+    .menu-pop {
+      position: absolute; top: 48px; right: 0;
+      min-width: 168px;
+      background: var(--bg-1);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+      padding: 6px;
+      display: none;
+    }
+    .menu-pop.open { display: block; }
+    .menu-item {
+      display: block; width: 100%; text-align: left;
+      font-family: var(--font-body); font-size: 13px; font-weight: 500;
+      color: var(--text-1);
+      background: none; border: 0; border-radius: 7px;
+      padding: 9px 12px; cursor: pointer;
+      transition: background .12s ease;
+    }
+    .menu-item:hover { background: var(--bg-2); }
+    .menu-item .mi { font-family: var(--font-mono); font-size: 10px; color: var(--accent); display: block; margin-bottom: 2px; letter-spacing: .08em; text-transform: uppercase; }
+
+    /* Footer line (single line, keeps the About info present). */
+    footer {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      z-index: 2;
+      padding: 10px 20px;
+      display: flex; flex-wrap: wrap; gap: 6px 16px; justify-content: space-between;
+      font-family: var(--font-mono); font-size: 10px; color: var(--text-3);
+      background: linear-gradient(180deg, transparent, rgba(248, 249, 250, 0.85));
+    }
+
+    /* ---- "Fires over time" modal (internal scroll allowed) ---- */
+    .modal-backdrop {
+      position: fixed; inset: 0;
+      z-index: 20;
+      background: rgba(33, 37, 41, 0.45);
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0; pointer-events: none;
+      transition: opacity .2s ease;
+    }
+    .modal-backdrop.open { opacity: 1; pointer-events: auto; }
+
+    .modal {
+      width: min(560px, calc(100vw - 40px));
+      max-height: calc(100vh - 80px);
+      display: flex; flex-direction: column;
+      background: var(--bg-1);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+      overflow: hidden;
+      transform: translateY(12px) scale(0.98);
+      transition: transform .2s ease;
+    }
+    .modal-backdrop.open .modal { transform: none; }
+
+    .modal-head {
+      flex: 0 0 auto;
+      display: flex; align-items: flex-start; gap: 12px;
+      padding: 18px 20px 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+    .modal-head h3 { margin: 0; font-size: 16px; font-weight: 600; }
+    .modal-head .sub { font-family: var(--font-mono); font-size: 11px; color: var(--text-3); margin-top: 2px; }
+    .modal-close {
+      margin-left: auto;
+      width: 30px; height: 30px; flex: 0 0 auto;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 15px; line-height: 1;
+      color: var(--text-3);
+      background: var(--bg-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all .15s ease;
+    }
+    .modal-close:hover { color: var(--text-1); background: var(--bg-3); }
+
+    .modal-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 18px 20px 20px;
+    }
+
+    .chart-wrap { width: 100%; }
+    .bar-row { display: flex; align-items: flex-end; gap: 5px; height: 200px; }
+    .bar-col {
+      flex: 1 1 0; min-width: 0;
+      display: flex; flex-direction: column; align-items: center;
+      height: 100%;
+    }
+    .bar-count {
+      font-family: var(--font-mono); font-size: 10px; color: var(--text-2);
+      margin-bottom: 6px;
+    }
+    .bar-area {
+      flex: 1 1 auto; width: 70%; max-width: 34px; min-height: 2px;
+      display: flex; align-items: flex-end;
+      background: var(--bg-2);
+      border-radius: 4px 4px 0 0;
+    }
+    .bar-fill {
+      width: 100%;
+      background: linear-gradient(180deg, var(--severe) 0%, var(--nominal) 75%, var(--amber) 100%);
+      border-radius: 4px 4px 0 0;
+      min-height: 0;
+      transition: height .4s ease;
+    }
+    .bar-date {
+      margin-top: 6px;
+      font-family: var(--font-mono); font-size: 9px; color: var(--text-3);
+      white-space: nowrap;
+      transform: rotate(-45deg);
+      transform-origin: top center;
+    }
+    .chart-empty { text-align: center; color: var(--text-3); font-size: 13px; padding: 40px 0; line-height: 1.6; }
+
+    /* Shared modal content blocks */
+    .block { margin-bottom: 18px; }
+    .block:last-child { margin-bottom: 0; }
+    .block-h {
+      font-family: var(--font-mono);
+      font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+      color: var(--accent);
+      margin: 0 0 8px;
+    }
+    .block p { font-size: 13px; line-height: 1.62; color: var(--text-2); margin: 0 0 8px; }
+    .block p:last-child { margin-bottom: 0; }
+    .block b { color: var(--text-1); font-weight: 600; }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    @media (max-width: 520px) { .two-col { grid-template-columns: 1fr; } }
+
+    .verdict-side {
+      background: var(--bg-2);
+      border: 1px solid var(--line);
+      border-top: 3px solid var(--accent);
+      border-radius: 10px;
+      padding: 12px 14px;
+    }
+    .verdict-side.vs-fire { border-top-color: var(--severe); }
+    .verdict-side .vm {
+      font-family: var(--font-mono); font-size: 10px;
+      letter-spacing: .08em; text-transform: uppercase;
+      color: var(--text-3); display: block; margin-bottom: 6px;
+    }
+    .verdict-side p { font-size: 12.5px; line-height: 1.55; color: var(--text-2); margin: 0; }
+    .verdict-side p b { color: var(--text-1); }
+
+    .src-list { list-style: none; margin: 0; padding: 0; }
+    .src-row {
+      display: flex; gap: 14px;
+      padding: 12px 2px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+    .src-row:last-child { border-bottom: 0; }
+    .src-name {
+      flex: 0 0 200px;
+      font-size: 13px; font-weight: 600; color: var(--text-1);
+    }
+    .src-desc { font-size: 12.5px; line-height: 1.55; color: var(--text-2); }
+    @media (max-width: 520px) { .src-row { flex-direction: column; gap: 4px; } .src-name { flex: none; } }
+
+    .report-meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-3); line-height: 1.6; }
+    .btn-download {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-family: var(--font-display); font-weight: 600; font-size: 14px;
+      color: #ffffff;
+      background: var(--fire-gradient);
+      border: 0; border-radius: 10px;
+      padding: 12px 22px; cursor: pointer;
+      box-shadow: 0 6px 20px rgba(197, 48, 53, 0.4);
+      transition: transform .15s ease, box-shadow .15s ease;
+      text-decoration: none;
+    }
+    .btn-download:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(197, 48, 53, 0.5); }
+    .dl-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+
+    .report-preview {
+      width: 100%;
+      font-family: var(--font-mono); font-size: 10.5px;
+      border-collapse: collapse;
+      color: var(--text-2);
+      margin-top: 14px;
+    }
+    .report-preview th {
+      text-align: left; font-weight: 500; color: var(--text-3);
+      text-transform: uppercase; letter-spacing: .05em;
+      padding: 6px 8px; border-bottom: 1px solid var(--line);
+      white-space: nowrap;
+    }
+    .report-preview td { padding: 5px 8px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
+    .report-preview tr:last-child td { border-bottom: 0; }
+
+    @media (max-height: 600px) {
+      #hero-content { padding-bottom: 60px; }
+      .wordmark { font-size: clamp(36px, 6vw, 60px); }
+      .cta { margin-top: 16px; padding: 13px 30px; font-size: 16px; }
+      .description { font-size: 12.5px; }
+    }
+  </style>
+</head>
+<body>
+
+  <div id="hero">
+    <div id="zoom-map"></div>
+    <div class="scrim"></div>
+
+    <div class="hero-meta">
+      <span class="live-dot"></span>
+      <span>NASA FIRMS · Live</span>
+    </div>
+
+    <div class="menu-wrap">
+      <button class="menu-btn" id="menu-btn" aria-expanded="false" aria-label="Menu">⋮</button>
+      <div class="menu-pop" id="menu-pop">
+        <button class="menu-item" data-modal="fires">
+          <span class="mi">Analytics</span>
+          Fires over time
+        </button>
+        <button class="menu-item" data-modal="about">
+          <span class="mi">About</span>
+          Methodology
+        </button>
+        <button class="menu-item" data-modal="sources">
+          <span class="mi">Credits</span>
+          Data sources
+        </button>
+        <button class="menu-item" data-modal="report">
+          <span class="mi">Export</span>
+          Download report
+        </button>
+      </div>
+    </div>
+
+    <div id="hero-content">
+      <h1 class="wordmark">Ember<span class="flame">Map</span></h1>
+      <p class="tagline">
+        Real-time AI detection for <strong>industrial fires</strong> and
+        <strong>persistent thermal sources</strong> across India.
+      </p>
+      <p class="description">
+        Fuses live NASA FIRMS hotspots with OSM, WRI power-plant and NASA gas-flare
+        data to classify fires as industrial, forest, agricultural or mining.
+      </p>
+      <a class="cta" href="/dashboard">Open Dashboard <span class="arrow">→</span></a>
+    </div>
+
+    <footer>
+      <span>EmberMap · SIH26162 · Disaster Management</span>
+      <span>Data: NASA FIRMS · OpenStreetMap · WRI · NASA VIIRS Nightfire</span>
+    </footer>
+  </div>
+
+  <div class="modal-backdrop" id="modal-backdrop">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-head">
+        <div>
+          <h3 id="modal-title">Fires over time</h3>
+          <div class="sub" id="modal-sub">Loading detections per day…</div>
+        </div>
+        <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" id="modal-body">
+        <div class="chart-empty" id="chart-loading">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <script>
+    "use strict";
+
+    /* ---- World → India background animation (enhancement only: the hero
+       content is already visible in the markup, so a JS failure can never
+       hide the tagline, description or dashboard button). ---- */
+    function startZoom() {
+      const el = document.getElementById("zoom-map");
+      if (typeof L === "undefined" || !el) return;
+      el.style.opacity = 1;
+      const map = L.map("zoom-map", {
+        zoomControl: false,
+        attributionControl: false,
+        scrollWheelZoom: false,
+        dragging: false,
+        touchZoom: false,
+        doubleClickZoom: false,
+        boxZoom: false,
+        keyboard: false,
+      });
+      map.setView([20, 15], 2);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 18,
+      }).addTo(map);
+      map.whenReady(() => {
+        map.invalidateSize();
+        setTimeout(() => map.flyTo([22.5, 79], 5, { duration: 3.0, easeLinearity: 0.25 }), 300);
+        setTimeout(() => el.classList.add("landed"), 3300);
+      });
+    }
+
+    if (document.readyState === "complete") {
+      setTimeout(startZoom, 250);
+    } else {
+      window.addEventListener("load", () => setTimeout(startZoom, 250));
+    }
+
+    /* ---- ⋮ menu ---- */
+    const menuBtn = document.getElementById("menu-btn");
+    const menuPop = document.getElementById("menu-pop");
+
+    function closeMenu() {
+      menuPop.classList.remove("open");
+      menuBtn.setAttribute("aria-expanded", "false");
+    }
+
+    menuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = menuPop.classList.toggle("open");
+      menuBtn.setAttribute("aria-expanded", String(open));
+    });
+    document.addEventListener("click", (e) => {
+      if (!menuPop.contains(e.target) && !menuBtn.contains(e.target)) closeMenu();
+    });
+
+    /* ---- "Fires over time" + info modals ---- */
+    const backdrop = document.getElementById("modal-backdrop");
+    const titleEl = document.getElementById("modal-title");
+    const bodyEl = document.getElementById("modal-body");
+    const subEl = document.getElementById("modal-sub");
+    const DAYS = 14;
+
+    const MODAL_META = {
+      fires:    { title: "Fires over time",     sub: "Loading detections per day…" },
+      about:    { title: "Methodology",         sub: "How EmberMap classifies fires" },
+      sources:  { title: "Data sources",        sub: "Credits & contributions" },
+      report:   { title: "Download report",     sub: "Current live detections" },
+    };
+
+    function openModal(type) {
+      closeMenu();
+      titleEl.textContent = MODAL_META[type].title;
+      subEl.textContent = MODAL_META[type].sub;
+      renderModal(type);
+      backdrop.classList.add("open");
+    }
+
+    function closeModal() {
+      backdrop.classList.remove("open");
+    }
+
+    function renderModal(type) {
+      if (type === "fires") return loadChart();
+      if (type === "about") return renderAbout();
+      if (type === "sources") return renderSources();
+      if (type === "report") return loadReport();
+    }
+
+    document.querySelectorAll(".menu-item[data-modal]").forEach((item) => {
+      item.addEventListener("click", () => openModal(item.getAttribute("data-modal")));
+    });
+    document.getElementById("modal-close").addEventListener("click", closeModal);
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) closeModal();
+    });
+
+    async function fetchJson(url) {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.json();
+    }
+
+    function showChartError(err) {
+      bodyEl.innerHTML =
+        '<div class="chart-empty">Could not load detection history.<br>' +
+        err.message +
+        "</div>";
+    }
+
+    async function loadChart() {
+      bodyEl.innerHTML = '<div class="chart-empty" id="chart-loading">Loading…</div>';
+      subEl.textContent = "Loading detections per day…";
+      try {
+        const data = await fetchJson("/api/history/daily?days=" + DAYS);
+        renderChart(data.days);
+      } catch (err) {
+        showChartError(err);
+      }
+    }
+
+    function renderChart(days) {
+      const counts = (days || []).map((d) => d.count);
+      const total = counts.reduce((a, b) => a + b, 0);
+      const max = Math.max(1, ...counts);
+      subEl.textContent = `${total} detections across the last ${counts.length} days`;
+      if (counts.length === 0 || total === 0) {
+        bodyEl.innerHTML =
+          '<div class="chart-empty">No detections recorded yet. Open the dashboard so the FIRMS feed can populate the fire-history table.</div>';
+        return;
+      }
+      let html = '<div class="chart-wrap"><div class="bar-row">';
+      days.forEach((d) => {
+        const h = d.count > 0 ? Math.max(6, Math.round((d.count / max) * 100)) : 2;
+        html +=
+          `<div class="bar-col" title="${d.date}: ${d.count}">` +
+          `<span class="bar-count">${d.count}</span>` +
+          `<div class="bar-area"><div class="bar-fill" style="height:${h}%"></div></div>` +
+          `<span class="bar-date">${d.date.slice(5)}</span>` +
+          `</div>`;
+      });
+      html += "</div></div>";
+      bodyEl.innerHTML = html;
+    }
+
+    /* ---- About / methodology ---- */
+    function renderAbout() {
+      bodyEl.innerHTML =
+        '<div class="block">' +
+          '<p class="block-h">What it is</p>' +
+          "<p>EmberMap is a real-time industrial fire detection dashboard. It pulls live " +
+          "hot-spot detections from NASA FIRMS, clips them to India’s true boundary, and fuses " +
+          "them with OpenStreetMap industrial, vegetation and mining zones, the WRI Global " +
+          "Power Plant Database and the NASA VIIRS Nightfire gas-flare catalog — classifying " +
+          "each fire as <b>industrial</b>, <b>mining</b>, <b>forest</b> or <b>agricultural</b>, " +
+          "and flagging <b>persistent thermal sources</b> that recur in the same place over days.</p>" +
+        "</div>" +
+        '<div class="block">' +
+          '<p class="block-h">Built for</p>' +
+          "<p>Smart India Hackathon 2026 — Problem ID <b>SIH26162</b>, theme <b>Disaster Management</b>, " +
+          "organising agency <b>NTRO</b>, on fire-detection and thermal-source classification using " +
+          "NASA FIRMS, OSM &amp; satellite data.</p>" +
+        "</div>" +
+        '<div class="block">' +
+          '<p class="block-h">How classification works</p>' +
+          "<p>Every fire gets two parallel labels — the <b>rule-based</b> verdict is the primary answer, " +
+          "and the <b>ML model</b> runs alongside it as a confidence check, not a black box.</p>" +
+          '<div class="two-col">' +
+            '<div class="verdict-side">' +
+              '<span class="vm">Rule-based (primary)</span>' +
+              "<p>A spatial join measures the UTM-projected distance from each hotspot to the nearest " +
+              "industrial zone or power plant (<b>1 km</b>), mining zone (<b>1 km</b>) and vegetation " +
+              "area (<b>3 km</b>). The first matching rule decides: industrial → mining → forest → other.</p>" +
+            "</div>" +
+            '<div class="verdict-side vs-fire">' +
+              '<span class="vm">ML validation (parallel)</span>' +
+              "<p>A scikit-learn RandomForest, trained only on labels produced by that same rule over past " +
+              "detections, is scored on each fire. It outputs a calibrated probability " +
+              "(e.g. “91% industrial”) beside the rule label — a repeatable, explainable check.</p>" +
+            "</div>" +
+          "</div>" +
+        "</div>" +
+        '<div class="block">' +
+          '<p class="block-h">Persistent thermal sources</p>' +
+          "<p>When the same coordinates are detected across 2+ distinct days within 300 m in the last " +
+          "14 days, EmberMap flags a <b>persistent thermal source</b> — recurring gas flares and " +
+          "industrial stacks matter most for monitoring.</p>" +
+        "</div>";
+    }
+
+    /* ---- Data sources & credits ---- */
+    function renderSources() {
+      bodyEl.innerHTML =
+        '<div class="block">' +
+          '<p class="block-h">Data sources</p>' +
+          '<div class="src-list">' +
+            '<div class="src-row"><div class="src-name">NASA FIRMS</div>' +
+              '<div class="src-desc">Live VIIRS/MODIS hot-spot detections (satellite fire pixels), refreshed ~15 min via the area CSV API.</div></div>' +
+            '<div class="src-row"><div class="src-name">OpenStreetMap / Overpass</div>' +
+              '<div class="src-desc">Industrial, vegetation and quarry/mine-shaft polygons that anchor the spatial classification.</div></div>' +
+            '<div class="src-row"><div class="src-name">WRI Global Power Plant Database</div>' +
+              '<div class="src-desc">Point locations of ~1,600 India power plants — a fire within 1 km is treated as industrial.</div></div>' +
+            '<div class="src-row"><div class="src-name">NASA VIIRS Nightfire</div>' +
+              '<div class="src-desc">Annual global gas-flare catalog used to tag industrial fires likely coming from gas flares.</div></div>' +
+            '<div class="src-row"><div class="src-name">NASA GIBS</div>' +
+              '<div class="src-desc">Satellite true-color base layers (render-only) toggled from the dashboard map.</div></div>' +
+            '<div class="src-row"><div class="src-name">scikit-learn</div>' +
+              '<div class="src-desc">Out-of-the-box RandomForest + isotonic calibration behind the ML validation label.</div></div>' +
+          "</div>" +
+        "</div>" +
+        '<div class="block">' +
+          '<p class="block-h">Credits</p>' +
+          "<p>All data is public and licence-permitted; each source is attributed on the dashboard map " +
+          "and in this popover. India boundary from Natural Earth (public domain). Built with FastAPI, " +
+          "SQLite, GeoPandas, scikit-learn and Leaflet.</p>" +
+        "</div>";
+    }
+
+    /* ---- Download report (CSV of live detections) ---- */
+    const REPORT_COLUMNS = [
+      "latitude", "longitude",
+      "fire_type_rule", "fire_type_ml", "fire_type_ml_confidence",
+      "gas_flare", "distance_to_industrial_m",
+      "near_power_plant", "power_plant_name",
+      "near_mining", "mining_site_name",
+      "persistent_thermal_source", "occurrence_count",
+      "confidence", "bright_ti4", "frp", "satellite",
+      "acq_date", "acq_time",
+    ];
+
+    async function loadReport() {
+      bodyEl.innerHTML =
+        '<div class="chart-empty">Fetching live detections…<br>' +
+        '<span class="report-meta">pulling /api/flagged-fires</span></div>';
+      subEl.textContent = "Current live detections";
+      try {
+        const fc = await fetchJson("/api/flagged-fires");
+        const feats = (fc && fc.features) || [];
+        subEl.textContent = `${feats.length} live detections in the current window`;
+        if (feats.length === 0) {
+          bodyEl.innerHTML =
+            '<div class="chart-empty">No detections in the current FIRMS window.</div>';
+          return;
+        }
+        const csv = buildCsv(fc);
+        const preview = feats.slice(0, 6);
+        let table = '<table class="report-preview"><thead><tr><th>Rule</th><th>ML</th><th>Dist (m)</th><th>Persist</th><th>IR date</th></tr></thead><tbody>';
+        preview.forEach((f) => {
+          const p = f.properties || {};
+          table +=
+            "<tr>" +
+            `<td>${esc(p.fire_type_rule || "")}</td>` +
+            `<td>${esc(p.fire_type_ml || "")}${p.fire_type_ml_confidence ? " (" + p.fire_type_ml_confidence.toFixed(2) + ")" : ""}</td>` +
+            `<td>${p.distance_m != null ? Math.round(p.distance_m) : ""}</td>` +
+            `<td>${p.persistent_thermal_source ? p.occurrence_count + "×" : ""}</td>` +
+            `<td>${esc(p.acq_date || "")}</td>` +
+            "</tr>";
+        });
+        table += "</tbody></table>";
+        bodyEl.innerHTML =
+          '<div class="dl-actions">' +
+            '<button class="btn-download" id="btn-csv-download">Download CSV (' + feats.length + " detections)</button>" +
+            '<span class="report-meta">Columns: lat/lon, classification (rule + ML), distance-to-nearest-zone, ' +
+            "gas-flare, power-plant &amp; mining match, persistence status (count), confidence, brightness, FRP, " +
+            "satellite, acquisition date/time.</span>" +
+          "</div>" + table;
+        document.getElementById("btn-csv-download").addEventListener("click", () => downloadCsv(csv, feats.length));
+      } catch (err) {
+        subEl.textContent = "Report unavailable";
+        bodyEl.innerHTML =
+          '<div class="chart-empty">Could not fetch live detections.<br>' +
+          esc(err.message) + "</div>";
+      }
+    }
+
+    function esc(s) {
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function csvCell(value) {
+      if (value == null || value === "") return "";
+      const s = String(value);
+      return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }
+
+    function buildCsv(fc) {
+      const rows = (fc.features || []).map((f) => {
+        const p = f.properties || {};
+        const coords = (f.geometry && f.geometry.coordinates) || [];
+        return [
+          coords[1], coords[0],
+          p.fire_type_rule, p.fire_type_ml, p.fire_type_ml_confidence,
+          p.gas_flare ? 1 : 0, p.distance_m,
+          p.near_power_plant ? 1 : 0, p.power_plant_name,
+          p.near_mining ? 1 : 0, p.mining_site_name,
+          p.persistent_thermal_source ? 1 : 0, p.occurrence_count,
+          p.confidence, p.bright_ti4, p.frp, p.satellite,
+          p.acq_date, p.acq_time,
+        ];
+      });
+      return [REPORT_COLUMNS, ...rows].map((r) => r.map(csvCell).join(",")).join("\r\n") + "\r\n";
+    }
+
+    function downloadCsv(text, n) {
+      const blob = new Blob(["\ufeff", text], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `embermap_detections_${new Date().toISOString().slice(0, 10)}_${n}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+  </script>
+</body>
+</html>

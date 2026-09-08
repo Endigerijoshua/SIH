@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 
 # pyrefly: ignore [missing-import]
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 
 # pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
@@ -67,6 +67,14 @@ PLACEHOLDER_INDEX = """<!doctype html>
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
+    path = STATIC_DIR / "landing.html"
+    if path.exists():
+        return FileResponse(path)
+    return PLACEHOLDER_INDEX
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard():
     path = STATIC_DIR / "index.html"
     if path.exists():
         return FileResponse(path)
@@ -76,6 +84,12 @@ async def index():
 @app.get("/api/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/api/history/daily")
+async def history_daily(days: int = Query(14, ge=1, le=30)) -> dict:
+    """Per-day FIRMS detection counts from the local fire_history table."""
+    return {"days": db.daily_counts(days)}
 
 
 @app.get("/api/fires")
