@@ -141,6 +141,33 @@ def distinct_days_near(
     return sorted(days)
 
 
+def daily_counts(days: int = 14) -> list[dict]:
+    """Detection counts per UTC day for the last `days` days.
+
+    Returns a dense, forward-filled list of ``{"date": "YYYY-MM-DD", "count": n}``
+    entries (zero-filled for days with no detections) ordered oldest → newest, so
+    the frontend can render a bar/line chart without filling gaps itself.
+    """
+    days = max(1, min(int(days), 30))
+    cutoff = (today() - dt.timedelta(days=days - 1)).isoformat()
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            SELECT acq_date, COUNT(*) AS n
+            FROM fire_history
+            WHERE acq_date >= ?
+            GROUP BY acq_date
+            """,
+            (cutoff,),
+        )
+        counts = dict(cur.fetchall())
+    daily = []
+    for i in range(days):
+        d = (today() - dt.timedelta(days=days - 1 - i)).isoformat()
+        daily.append({"date": d, "count": int(counts.get(d, 0))})
+    return daily
+
+
 def _haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Great-circle distance between two lat/lon points, in meters."""
     radius = 6371000.0

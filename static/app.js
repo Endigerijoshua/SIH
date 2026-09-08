@@ -198,6 +198,46 @@ const cache = { firesFC: null, zonesFC: null, sitesFC: null, powerFC: null, flar
 let currentView = "detections";
 let selectedCategories = new Set();
 
+/* Skeleton loaders shown while the initial / refresh fetch is in flight. */
+function skeletonListHtml() {
+  const patterns = [
+    ["46%", "92%", "64%"],
+    ["38%", "84%", "72%", "46%"],
+    ["52%", "88%", "58%"],
+    ["44%", "90%", "68%", "42%"],
+    ["40%", "86%", "74%"],
+  ];
+  return patterns
+    .map((widths) => {
+      const [verdictW, ...rest] = widths;
+      const lines = rest
+        .map((w) => `<div class="skeleton s-line" style="width:${w}"></div>`)
+        .join("");
+      return (
+        `<div class="entry entry-skeleton">` +
+        `<div class="verdict">` +
+        `<div class="skeleton s-badge"></div>` +
+        `<div class="skeleton s-line s-verdict" style="width:${verdictW}"></div>` +
+        `</div>${lines}</div>`
+      );
+    })
+    .join("");
+}
+
+function showSkeletonLoaders(on) {
+  document.querySelectorAll(".badge-count").forEach((el) => {
+    el.classList.toggle("skeleton", on);
+    if (on) el.textContent = "";
+  });
+  if (on) listEl.innerHTML = skeletonListHtml();
+}
+
+function clearSkeletonLoaders() {
+  document.querySelectorAll(".badge-count").forEach((el) => {
+    el.classList.remove("skeleton");
+  });
+}
+
 function confidenceColor(confidence) {
   return CONFIDENCE_COLORS[confidence] || "#8892a6";
 }
@@ -531,6 +571,9 @@ function renderDetectionsSidebar(features) {
   const countElId = (cat) =>
     ({ industrial: "ind", other_natural: "nat", persistent: "persist" })[cat] || cat;
 
+  // Real data is here — replace the skeleton badges with live count-ups.
+  clearSkeletonLoaders();
+
   // Animated stat badge counts
   animateCount(document.getElementById("count-all"), features.length);
   for (const cat of CATEGORY_ORDER) {
@@ -613,6 +656,7 @@ function renderSitesSidebar(sitesFC) {
 
 function showError(message) {
   listEl.innerHTML = "";
+  clearSkeletonLoaders();
   const el = document.createElement("div");
   el.className = "empty";
   el.textContent = message;
@@ -637,8 +681,10 @@ async function loadDetections(force = false) {
   setViewButtons("detections");
   hideLayer(siteLayer);
   summaryEl.textContent = "Fetching live data…";
+  const willFetch = force || !cache.firesFC;
+  if (willFetch) showSkeletonLoaders(true);
   try {
-    if (force || !cache.firesFC) {
+    if (willFetch) {
       [cache.firesFC, cache.zonesFC, cache.powerFC, cache.flaresFC, cache.miningFC] =
         await Promise.all([
           fetchJson(FIRES_URL),
