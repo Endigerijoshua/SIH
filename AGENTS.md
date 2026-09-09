@@ -367,5 +367,15 @@ sih-fire-detection/
        + IBM Plex Mono + Inter, radar HUD + scanlines, pulsing LIVE badge + persistent
        markers, count-up stats, hover-to-highlight markers, fade/scale tab transitions.
        All colors tunable via CSS custom properties in `:root`.
+- [x] Overpass resilience hardening: `fetch_region()` now treats a HTTP 200 with a
+       non-JSON body (proxy error pages, tarpits) as a mirror failure and falls
+       through to the next mirror instead of aborting the whole tile fetch
+       (`app/services/osm.py`; caught `ValueError`, `last_error` kept for the final
+       RuntimeError). Timeouts: per-request `OVERPASS_REQUEST_TIMEOUT_SECONDS=12`
+       (confirmed passed through, not the 180 s client default); falling back across
+       all mirrors on `httpx.RequestError`/429/502/503/504. Tests added in
+       `tests/test_osm_resilience.py` (timeout→next, 500→next, garbage-body→next,
+       all-mirrors-fail→RuntimeError, timeout propagation, and app import does no
+       network work) — 73 tests, ruff clean.
 - [ ] DBSCAN clustering (stretch)
 - [ ] Deployed somewhere accessible for demo

@@ -23,7 +23,7 @@ from pathlib import Path
 
 import httpx
 
-from ..config import settings
+from ..config import repo_path, settings
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ _NS = "{http://www.opengis.net/kml/2.2}"
 
 
 def _cache_path() -> Path:
-    return Path(settings.flares_cache_file)
+    return repo_path(settings.flares_cache_file)
 
 
 def _cache_is_fresh(path: Path) -> bool:

@@ -23,7 +23,7 @@ from pathlib import Path
 
 import httpx
 
-from ..config import settings
+from ..config import repo_path, settings
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +174,7 @@ def osm_elements_to_featurecollection(elements: list[dict]) -> dict:
 
 
 def _cache_path(zone_type: str) -> Path:
-    return Path(getattr(settings, CACHE_FILE_SETTINGS[zone_type]))
+    return repo_path(getattr(settings, CACHE_FILE_SETTINGS[zone_type]))
 
 
 def _cache_is_fresh(path: Path, zone_type: str) -> bool:
@@ -254,7 +254,19 @@ async def fetch_region(
                     timeout=OVERPASS_REQUEST_TIMEOUT_SECONDS,
                 )
                 response.raise_for_status()
-                return response.json().get("elements", [])
+                try:
+                    return response.json().get("elements", [])
+                except ValueError as exc:
+                    # A 200 with a non-JSON body (proxy error pages, HTML
+                    # captcha/tarpit responses, etc.) is still a mirror failure —
+                    # fall through to the next mirror instead of killing the tile.
+                    last_error = exc
+                    logger.warning(
+                        "%s returned a non-JSON body (%s) — treating as mirror failure",
+                        base_url,
+                        exc,
+                    )
+                    break
             except (httpx.RequestError, httpx.HTTPStatusError) as exc:
                 last_error = exc
                 retriable = isinstance(exc, httpx.RequestError) or (

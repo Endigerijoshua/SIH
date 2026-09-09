@@ -6,7 +6,18 @@ endpoints that fetch + enrich live fire data.
 
 import asyncio
 import logging
+import sys
 from pathlib import Path
+
+# Check runs before importing app.services / app.config — those modules use
+# PEP 604 union syntax (`dict | None`).
+_MIN_PYTHON = (3, 11)
+if sys.version_info < _MIN_PYTHON:
+    raise SystemExit(
+        f"EmberMap requires Python {_MIN_PYTHON[0]}.{_MIN_PYTHON[1]}+ "
+        f"(found {sys.version_info.major}.{sys.version_info.minor}). "
+        "Install Python 3.11 or newer and retry."
+    )
 
 # pyrefly: ignore [missing-import]
 import httpx
@@ -24,7 +35,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db
-from .config import settings
+from .config import repo_path, settings
 from .services import (
     clustering,
     firms,
@@ -256,7 +267,7 @@ def _reference_cache_version() -> str:
         "flares_cache_file",
         "mining_cache_file",
     ):
-        path = Path(getattr(settings, name, name))
+        path = repo_path(getattr(settings, name, name))
         try:
             stat = path.stat()
             parts.append(f"{path.name}:{stat.st_size}:{stat.st_mtime:.0f}")
