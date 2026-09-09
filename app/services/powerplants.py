@@ -17,7 +17,7 @@ from pathlib import Path
 import httpx
 import pandas as pd
 
-from ..config import settings
+from ..config import repo_path, settings
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ PROPERTY_FIELDS = ("gppd_idnr", "name", "capacity_mw", "primary_fuel", "country_
 
 
 def _cache_path() -> Path:
-    return Path(settings.power_plants_cache_file)
+    return repo_path(settings.power_plants_cache_file)
 
 
 def _cache_is_fresh(path: Path) -> bool:

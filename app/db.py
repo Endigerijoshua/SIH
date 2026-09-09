@@ -15,7 +15,7 @@ import math
 import sqlite3
 from contextlib import contextmanager
 
-from .config import settings
+from .config import repo_path, settings
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ CREATE INDEX IF NOT EXISTS idx_fire_history_location
 
 
 def db_path() -> str:
-    return settings.fire_history_db
+    return str(repo_path(settings.fire_history_db))
 
 
 def today() -> dt.date:

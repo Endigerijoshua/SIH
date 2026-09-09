@@ -1,10 +1,28 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def repo_path(name: str | Path) -> Path:
+    """Resolve a (possibly relative) file setting against the repo root.
+
+    Keeps the DB, cache and .env files in a fixed place regardless of the
+    working directory the app was launched from, so a fresh run from anywhere
+    behaves identically to one started in the repo root.
+    """
+    path = Path(name)
+    if path.is_absolute():
+        return path
+    return REPO_ROOT / path
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=str(REPO_ROOT / ".env"), env_file_encoding="utf-8"
+    )
 
     firms_map_key: str = ""
     firms_dataset: str = "VIIRS_SNPP_NRT"
